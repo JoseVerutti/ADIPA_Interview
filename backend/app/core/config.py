@@ -3,12 +3,12 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore", populate_by_name=True)
 
     app_name: str = "Questionnaire Extractor API"
     environment: str = "development"
@@ -32,6 +32,17 @@ class Settings(BaseSettings):
 
     # Si el LLM falla (cuota, red, sin API key) se usa el extractor basado en reglas.
     heuristic_fallback: bool = True
+
+    # Jev (TypeSafe AI): clasificador para las decisiones de clasificación. Opcional: sin
+    # key, o si Jev falla, el sistema usa sus reglas. Acepta JEV_API_KEY o TYPESAFE_API_KEY.
+    jev_api_key: str | None = Field(default=None, validation_alias=AliasChoices("JEV_API_KEY", "TYPESAFE_API_KEY"))
+    jev_model: str = "jev-1.14.0"
+    jev_timeout_seconds: float = Field(default=10, gt=0)
+    jev_max_concurrency: int = Field(default=8, ge=1, le=64)
+    # Confianza mínima para aceptar una elección de Jev (si no, deciden las reglas).
+    jev_min_confidence: float = Field(default=0.6, ge=0, le=1)
+    # Si la probabilidad de que el documento sea un cuestionario es menor, se rechaza sin llamar al LLM.
+    jev_gate_threshold: float = Field(default=0.1, ge=0, le=1)
 
     @property
     def cors_origins_list(self) -> list[str]:

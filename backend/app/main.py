@@ -17,7 +17,13 @@ from app.core.logging import configure_logging, request_id_var
 
 logger = logging.getLogger(__name__)
 
-EXPOSED_HEADERS = ["X-Request-ID", "X-Processing-Time-Ms", "X-Extraction-Method", "X-Fallback-Reason"]
+EXPOSED_HEADERS = [
+    "X-Request-ID",
+    "X-Processing-Time-Ms",
+    "X-Extraction-Method",
+    "X-Fallback-Reason",
+    "X-Classifier",
+]
 
 
 def error_response(status_code: int, code: str, message: str) -> JSONResponse:

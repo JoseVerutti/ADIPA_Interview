@@ -372,15 +372,22 @@ class _Parser:
 
         tipo = draft.tipo
         alternatives = [RawAlternative(valor=option.label, texto=option.text) for option in options]
+        # El tipo solo se fija cuando hay evidencia explícita (sección, marca, escala). Si no,
+        # queda en None: el normalizador lo infiere o lo consulta a un clasificador externo.
         if tipo is None:
             if options:
-                if draft.mode in (TipoItem.EMPAREJAMIENTO, TipoItem.ESCALA_LIKERT, TipoItem.VERDADERO_FALSO):
+                if draft.mode in (
+                    TipoItem.EMPAREJAMIENTO,
+                    TipoItem.ESCALA_LIKERT,
+                    TipoItem.VERDADERO_FALSO,
+                    TipoItem.SELECCION_MULTIPLE,
+                ):
                     tipo = draft.mode.value
             elif draft.true_false_mark or draft.mode is TipoItem.VERDADERO_FALSO:
                 tipo = TipoItem.VERDADERO_FALSO.value
             elif draft.scale and draft.mode in (TipoItem.ESCALA_LIKERT, None):
                 tipo = TipoItem.ESCALA_LIKERT.value
-            else:
+            elif draft.mode is TipoItem.DESARROLLO:
                 tipo = TipoItem.DESARROLLO.value
         if not options and draft.scale and tipo == TipoItem.ESCALA_LIKERT.value:
             alternatives = [

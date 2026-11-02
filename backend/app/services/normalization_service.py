@@ -13,13 +13,15 @@ vino del LLM o del extractor heurístico:
 import itertools
 import logging
 import re
+from collections.abc import Mapping
 from pathlib import Path
 
 from pydantic import ValidationError
 
 from app.core.exceptions import NoItemsDetectedError
-from app.schemas.extraction import RawAlternative, RawItem, RawQuestionnaire
+from app.schemas.extraction import RawItem, RawQuestionnaire
 from app.schemas.questionnaire import Cuestionario, Item, TipoItem
+from app.services.classification.base import TypeQuery
 from app.services.text_utils import clean_text, fold, is_likert_label, number_to_str, to_int
 
 logger = logging.getLogger(__name__)
@@ -98,10 +100,37 @@ TRUE_FALSE_LABELS: dict[str, tuple[str, str]] = {
 
 
 class QuestionnaireNormalizer:
-    def normalize(self, raw: RawQuestionnaire, *, idioma: str, source_name: str) -> Cuestionario:
+    def type_queries(self, raw: RawQuestionnaire) -> dict[int, TypeQuery]:
+        """Ítems (por índice) cuyo tipo las reglas no pueden decidir con seguridad.
+
+        Son los únicos que vale la pena enviar a un clasificador externo; el resto se
+        resuelve gratis y de forma determinista.
+        """
+        queries: dict[int, TypeQuery] = {}
+        for index, raw_item in enumerate(raw.items):
+            enunciado = _strip_number_prefix(clean_text(raw_item.enunciado), raw_item.numero)
+            if not enunciado:
+                continue
+            alternativas = self._clean_alternatives(raw_item)
+            candidates = _ambiguous_type_candidates(raw_item.tipo, alternativas, enunciado)
+            if candidates:
+                texts = [texto or (valor or "") for valor, texto in alternativas]
+                queries[index] = TypeQuery(enunciado=enunciado, alternativas=texts, candidates=candidates)
+        return queries
+
+    def normalize(
+        self,
+        raw: RawQuestionnaire,
+        *,
+        idioma: str,
+        source_name: str,
+        type_decisions: Mapping[int, TipoItem] | None = None,
+    ) -> Cuestionario:
+        """``type_decisions``: tipos decididos por un clasificador externo, por índice de ítem."""
+        decisions = type_decisions or {}
         normalized: list[tuple[int | None, dict]] = []
-        for raw_item in raw.items:
-            item = self._normalize_item(raw_item, idioma)
+        for index, raw_item in enumerate(raw.items):
+            item = self._normalize_item(raw_item, idioma, decisions.get(index))
             if item is not None:
                 normalized.append((to_int(raw_item.numero), item))
 
@@ -134,14 +163,14 @@ class QuestionnaireNormalizer:
         )
 
     # ------------------------------------------------------------------ ítems
-    def _normalize_item(self, raw: RawItem, idioma: str) -> dict | None:
+    def _normalize_item(self, raw: RawItem, idioma: str, decided_tipo: TipoItem | None = None) -> dict | None:
         enunciado = _strip_number_prefix(clean_text(raw.enunciado), raw.numero)
         if not enunciado:
             logger.info("Ítem descartado por no tener enunciado: %r", raw)
             return None
 
-        alternativas = [alt for alt in (self._clean_alternative(a) for a in raw.alternativas) if alt]
-        tipo = self._resolve_tipo(raw.tipo, alternativas)
+        alternativas = self._clean_alternatives(raw)
+        tipo = decided_tipo or self._resolve_tipo(raw.tipo, alternativas)
         answer = raw.respuesta_correcta
 
         if tipo is TipoItem.VERDADERO_FALSO:
@@ -170,17 +199,18 @@ class QuestionnaireNormalizer:
         }
 
     @staticmethod
-    def _clean_alternative(alt: RawAlternative) -> tuple[str | None, str] | None:
-        valor = None if alt.valor is None else clean_text(number_to_str(alt.valor)) or None
-        texto = clean_text(alt.texto)
-        if not texto and valor is None:
-            return None
-        return valor, texto
+    def _clean_alternatives(raw: RawItem) -> list[tuple[str | None, str]]:
+        cleaned = []
+        for alt in raw.alternativas:
+            valor = None if alt.valor is None else clean_text(number_to_str(alt.valor)) or None
+            texto = clean_text(alt.texto)
+            if texto or valor is not None:
+                cleaned.append((valor, texto))
+        return cleaned
 
     @staticmethod
     def _resolve_tipo(raw_tipo: str | None, alternativas: list[tuple[str | None, str]]) -> TipoItem:
-        key = fold(raw_tipo or "").replace(" ", "_").replace("-", "_").replace("/", "_")
-        tipo = _TIPO_ALIASES.get(key)
+        tipo = _tipo_alias(raw_tipo)
 
         if _looks_true_false(alternativas) and tipo in (None, TipoItem.SELECCION_MULTIPLE):
             return TipoItem.VERDADERO_FALSO
@@ -202,6 +232,8 @@ class QuestionnaireNormalizer:
             match = _LIKERT_LABEL_WITH_VALUE_RE.match(texto)
             if match and (value is None or value == int(match["value"])):
                 value, texto = int(match["value"]), match["label"]
+            elif value is None:
+                value = to_int(texto)  # escala solo numérica ("1 2 3 4 5"): se conservan sus números
             entries.append((value, texto or (valor or "")))
 
         values = [value for value, _ in entries]
@@ -307,6 +339,27 @@ class QuestionnaireNormalizer:
 
 
 # ------------------------------------------------------------------ helpers
+
+
+def _tipo_alias(raw_tipo: str | None) -> TipoItem | None:
+    key = fold(raw_tipo or "").replace(" ", "_").replace("-", "_").replace("/", "_")
+    return _TIPO_ALIASES.get(key)
+
+
+def _ambiguous_type_candidates(
+    raw_tipo: str | None, alternativas: list[tuple[str | None, str]], enunciado: str
+) -> tuple[TipoItem, ...] | None:
+    """Tipos posibles cuando las reglas no pueden decidir (el primero es el que aplicarían)."""
+    tipo = _tipo_alias(raw_tipo)
+    if len(alternativas) >= 2:
+        if _looks_true_false(alternativas) or _looks_likert(alternativas):
+            return None
+        if tipo is not None and tipo is not TipoItem.DESARROLLO:
+            return None  # tipo explícito y coherente con tener alternativas
+        return (TipoItem.SELECCION_MULTIPLE, TipoItem.ESCALA_LIKERT)
+    if tipo is not None or enunciado.rstrip().endswith("?"):
+        return None  # tipo explícito, o una pregunta sin alternativas (claramente de desarrollo)
+    return (TipoItem.DESARROLLO, TipoItem.VERDADERO_FALSO)
 
 
 def _truth(value: str | None) -> bool | None:

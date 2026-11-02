@@ -1,19 +1,33 @@
 """Orquestador del caso de uso: archivo subido → cuestionario estructurado.
 
-Pipeline: validar archivo → extraer texto → extraer ítems (LLM, con respaldo
-heurístico) → detectar idioma → normalizar y validar contra el esquema.
+Pipeline: validar archivo → extraer texto → filtro "¿es un cuestionario?" (clasificador)
+→ extraer ítems (LLM, con respaldo heurístico) → clasificar ítems ambiguos e idioma
+(reglas + clasificador) → normalizar y validar contra el esquema.
+
+Ninguna decisión de clasificación requiere una llamada extra al LLM generativo: el LLM
+estructura el contenido (y propone el tipo en esa misma llamada); las decisiones que
+quedan las toman reglas deterministas y, cuando no alcanzan, el clasificador (Jev).
+Sin clasificador configurado el pipeline se comporta exactamente igual que antes.
 Nada se persiste: el documento y el resultado viven solo durante la petición.
 """
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 
 from starlette.concurrency import run_in_threadpool
 
-from app.core.exceptions import DocumentTooLongError, ExtractionError, LLMError, LLMRateLimitError
+from app.core.exceptions import (
+    DocumentTooLongError,
+    ExtractionError,
+    LLMError,
+    LLMRateLimitError,
+    NoItemsDetectedError,
+)
 from app.schemas.extraction import RawQuestionnaire
-from app.schemas.questionnaire import Cuestionario
+from app.schemas.questionnaire import Cuestionario, TipoItem
+from app.services.classification.base import Classifier, NoopClassifier
 from app.services.file_validation_service import FileValidationService
 from app.services.heuristic_extraction_service import HeuristicExtractionService
 from app.services.language_detection_service import UNDETERMINED, LanguageDetectionService
@@ -33,6 +47,8 @@ class ExtractionResult:
     method: str
     provider: str | None = None
     fallback_reason: str | None = None
+    classifier: str | None = None
+    classifier_decisions: int = 0
     timings_ms: dict[str, int] = field(default_factory=dict)
 
 
@@ -48,6 +64,8 @@ class QuestionnaireService:
         llm_extractor: LLMExtractionService | None,
         heuristic_fallback: bool,
         max_text_chars: int,
+        classifier: Classifier | None = None,
+        gate_threshold: float = 0.1,
     ) -> None:
         self._file_validator = file_validator
         self._text_extractor = text_extractor
@@ -57,10 +75,16 @@ class QuestionnaireService:
         self._llm_extractor = llm_extractor
         self._heuristic_fallback = heuristic_fallback
         self._max_text_chars = max_text_chars
+        self._classifier: Classifier = classifier or NoopClassifier()
+        self._gate_threshold = gate_threshold
 
     @property
     def llm_provider(self) -> str | None:
         return self._llm_extractor.provider if self._llm_extractor else None
+
+    @property
+    def classifier_name(self) -> str | None:
+        return self._classifier.name
 
     async def process(self, filename: str | None, content: bytes) -> ExtractionResult:
         timings: dict[str, int] = {}
@@ -79,20 +103,29 @@ class QuestionnaireService:
             )
 
         step = time.perf_counter()
+        await self._check_is_questionnaire(text)
+        timings["gate"] = _elapsed_ms(step)
+
+        step = time.perf_counter()
         raw, method, fallback_reason = await self._extract_items(text)
         timings["item_extraction"] = _elapsed_ms(step)
 
-        idioma = self._language_detector.detect(text)
-        if idioma == UNDETERMINED and raw.idioma and len(raw.idioma.strip()) == 2:
-            idioma = raw.idioma.strip().lower()
+        step = time.perf_counter()
+        type_decisions = await self._classify_ambiguous_items(raw)
+        idioma = await self._detect_language(text, raw)
+        timings["classification"] = _elapsed_ms(step)
 
-        questionnaire = self._normalizer.normalize(raw, idioma=idioma, source_name=filename or "")
+        questionnaire = self._normalizer.normalize(
+            raw, idioma=idioma, source_name=filename or "", type_decisions=type_decisions
+        )
         timings["total"] = _elapsed_ms(started)
         logger.info(
-            "Cuestionario procesado: %d ítems, idioma=%s, método=%s, tiempos=%s",
+            "Cuestionario procesado: %d ítems, idioma=%s, método=%s, clasificador=%s (%d decisiones), tiempos=%s",
             questionnaire.total_items,
             idioma,
             method,
+            self._classifier.name or "reglas",
+            len(type_decisions),
             timings,
         )
         return ExtractionResult(
@@ -100,8 +133,39 @@ class QuestionnaireService:
             method=method,
             provider=self.llm_provider if method == METHOD_LLM else None,
             fallback_reason=fallback_reason,
+            classifier=self._classifier.name,
+            classifier_decisions=len(type_decisions),
             timings_ms=timings,
         )
+
+    async def _check_is_questionnaire(self, text: str) -> None:
+        """Filtro previo: evita gastar una llamada al LLM en documentos que no son cuestionarios."""
+        probability = await self._classifier.questionnaire_probability(text)
+        if probability is None:
+            return
+        logger.info("Clasificador: probabilidad de que sea un cuestionario = %.3f", probability)
+        if probability < self._gate_threshold:
+            raise NoItemsDetectedError(
+                "El documento no parece contener un cuestionario: no se encontraron preguntas ni "
+                "afirmaciones para responder."
+            )
+
+    async def _classify_ambiguous_items(self, raw: RawQuestionnaire) -> dict[int, TipoItem]:
+        """Consulta al clasificador solo los ítems cuyo tipo las reglas no pueden decidir."""
+        queries = self._normalizer.type_queries(raw)
+        if not queries:
+            return {}
+        decisions = await self._classifier.classify_item_types(list(queries.values()))
+        return {index: tipo for index, tipo in zip(queries, decisions, strict=True) if tipo is not None}
+
+    async def _detect_language(self, text: str, raw: RawQuestionnaire) -> str:
+        """Detector determinístico → idioma propuesto por el LLM (sin costo extra) → clasificador → 'und'."""
+        idioma = self._language_detector.detect(text)
+        if idioma != UNDETERMINED:
+            return idioma
+        if raw.idioma and re.fullmatch(r"[a-zA-Z]{2}", raw.idioma.strip()):
+            return raw.idioma.strip().lower()
+        return await self._classifier.detect_language(text) or UNDETERMINED
 
     async def _extract_items(self, text: str) -> tuple[RawQuestionnaire, str, str | None]:
         if self._llm_extractor is not None:

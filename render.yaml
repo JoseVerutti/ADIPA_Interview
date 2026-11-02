@@ -20,5 +20,7 @@ services:
         sync: false # se ingresa en el dashboard, nunca en el repositorio
       - key: GROQ_API_KEY
         sync: false
+      - key: JEV_API_KEY
+        sync: false # opcional: clasificador Jev (TypeSafe AI)
       - key: CORS_ORIGINS
         sync: false # p. ej. https://<tu-app>.vercel.app

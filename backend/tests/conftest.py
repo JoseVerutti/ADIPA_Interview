@@ -27,10 +27,37 @@ class FakeLLMClient:
         return json.dumps(response, ensure_ascii=False) if isinstance(response, dict) else response
 
 
+class FakeClassifier:
+    """Clasificador falso con respuestas fijas; registra las llamadas recibidas."""
+
+    name = "fake-jev"
+
+    def __init__(self, *, probability=None, item_types=None, language=None) -> None:
+        self.probability = probability
+        self.item_types = item_types or {}  # enunciado -> TipoItem
+        self.language = language
+        self.calls: list[str] = []
+        self.type_queries = []
+
+    async def questionnaire_probability(self, text):
+        self.calls.append("gate")
+        return self.probability
+
+    async def classify_item_types(self, queries):
+        self.calls.append("types")
+        self.type_queries.extend(queries)
+        return [self.item_types.get(query.enunciado) for query in queries]
+
+    async def detect_language(self, text):
+        self.calls.append("language")
+        return self.language
+
+
 @pytest.fixture
 def make_settings() -> Callable[..., Settings]:
     def _make(**overrides) -> Settings:
-        values = {"llm_provider": "none", "heuristic_fallback": True} | overrides
+        # Sin keys explícitamente: los tests nunca deben llamar a servicios externos reales.
+        values = {"llm_provider": "none", "heuristic_fallback": True, "jev_api_key": None} | overrides
         return Settings(_env_file=None, **values)
 
     return _make
@@ -38,10 +65,10 @@ def make_settings() -> Callable[..., Settings]:
 
 @pytest.fixture
 def make_client(make_settings) -> Callable[..., TestClient]:
-    def _make(llm_client=None, **overrides) -> TestClient:
+    def _make(llm_client=None, classifier=None, **overrides) -> TestClient:
         settings = make_settings(**overrides)
         app = create_app(settings)
-        service = build_questionnaire_service(settings, llm_client)
+        service = build_questionnaire_service(settings, llm_client, classifier)
         app.dependency_overrides[get_questionnaire_service] = lambda: service
         app.dependency_overrides[get_settings] = lambda: settings
         return TestClient(app)

@@ -1,9 +1,9 @@
 """Procesa cada documento de /examples con el mismo servicio que usa la API y guarda el JSON.
 
 Usa la configuración de entorno (.env): con GEMINI_API_KEY/GROQ_API_KEY se extrae con el
-LLM; sin API key, con el extractor heurístico.
+LLM (si no, con el extractor heurístico) y con JEV_API_KEY se clasifica con Jev.
 
-Uso (desde backend/):  python -m scripts.run_examples [--heuristic]
+Uso (desde backend/):  python -m scripts.run_examples [--heuristic]   (--heuristic: solo reglas)
 """
 
 import asyncio
@@ -22,7 +22,7 @@ EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples"
 async def main(force_heuristic: bool) -> None:
     settings = get_settings()
     if force_heuristic:
-        settings = settings.model_copy(update={"llm_provider": "none"})
+        settings = settings.model_copy(update={"llm_provider": "none", "jev_api_key": None})
     configure_logging(settings.log_level)
     service = build_questionnaire_service(settings)
 
@@ -33,7 +33,9 @@ async def main(force_heuristic: bool) -> None:
         payload = result.questionnaire.model_dump(mode="json")
         output.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         method = f"llm:{result.provider}" if result.provider else result.method
-        print(f"{document.name} -> {output.name}: {result.questionnaire.total_items} ítems ({method})")
+        classifier = result.classifier or "reglas"
+        items = result.questionnaire.total_items
+        print(f"{document.name} -> {output.name}: {items} ítems ({method}, clasificador: {classifier})")
 
 
 if __name__ == "__main__":

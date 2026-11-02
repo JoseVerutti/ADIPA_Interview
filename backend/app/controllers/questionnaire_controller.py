@@ -25,7 +25,8 @@ _ERROR_RESPONSES = {
     description=(
         "Recibe un documento PDF, DOCX o XLSX y devuelve sus ítems, tipos, alternativas y "
         "respuestas correctas en el formato JSON estandarizado. La cabecera `X-Extraction-Method` "
-        "indica si se usó el LLM (`llm:<proveedor>`) o el extractor heurístico (`heuristic`)."
+        "indica si se usó el LLM (`llm:<proveedor>`) o el extractor heurístico (`heuristic`), y "
+        "`X-Classifier` si las decisiones de clasificación usaron Jev (`jev`) o solo reglas (`rules`)."
     ),
 )
 async def extract_questionnaire(
@@ -40,6 +41,7 @@ async def extract_questionnaire(
     result = await service.process(file.filename, content)
 
     response.headers["X-Extraction-Method"] = f"llm:{result.provider}" if result.provider else result.method
+    response.headers["X-Classifier"] = result.classifier or "rules"
     if result.fallback_reason:
         response.headers["X-Fallback-Reason"] = result.fallback_reason
     return result.questionnaire

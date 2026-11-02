@@ -64,3 +64,11 @@ class LLMRateLimitError(LLMError):
 
 class LLMOutputError(LLMError):
     """El LLM respondió, pero el contenido no es un JSON utilizable."""
+
+
+class ClassifierError(Exception):
+    """Fallo al invocar al clasificador (Jev). Nunca llega al usuario: se usan las reglas."""
+
+    def __init__(self, message: str, *, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable

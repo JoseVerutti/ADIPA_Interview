@@ -13,4 +13,5 @@ async def health(service: QuestionnaireService = Depends(get_questionnaire_servi
         "status": "ok",
         "version": __version__,
         "llm_provider": service.llm_provider,
+        "classifier": service.classifier_name,
     }

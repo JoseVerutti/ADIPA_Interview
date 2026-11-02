@@ -4,6 +4,9 @@ import logging
 from functools import lru_cache
 
 from app.core.config import Settings, get_settings
+from app.services.classification.base import Classifier, NoopClassifier
+from app.services.classification.jev_classifier import JevClassifier
+from app.services.classification.jev_client import JevClient
 from app.services.file_validation_service import FileValidationService
 from app.services.heuristic_extraction_service import HeuristicExtractionService
 from app.services.language_detection_service import LanguageDetectionService
@@ -31,9 +34,28 @@ def build_llm_client(settings: Settings) -> LLMClient | None:
     return None
 
 
-def build_questionnaire_service(settings: Settings, llm_client: LLMClient | None = None) -> QuestionnaireService:
+def build_classifier(settings: Settings) -> Classifier:
+    if not settings.jev_api_key:
+        logger.info("Sin JEV_API_KEY: las decisiones de clasificación se toman solo con reglas.")
+        return NoopClassifier()
+    client = JevClient(
+        settings.jev_api_key,
+        settings.jev_model,
+        timeout=settings.jev_timeout_seconds,
+        max_concurrency=settings.jev_max_concurrency,
+    )
+    return JevClassifier(client, min_confidence=settings.jev_min_confidence)
+
+
+def build_questionnaire_service(
+    settings: Settings,
+    llm_client: LLMClient | None = None,
+    classifier: Classifier | None = None,
+) -> QuestionnaireService:
     client = llm_client if llm_client is not None else build_llm_client(settings)
     return QuestionnaireService(
+        classifier=classifier if classifier is not None else build_classifier(settings),
+        gate_threshold=settings.jev_gate_threshold,
         file_validator=FileValidationService(settings.max_file_size_bytes),
         text_extractor=TextExtractionService(),
         language_detector=LanguageDetectionService(),
