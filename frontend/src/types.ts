@@ -30,5 +30,6 @@ export interface ExtractionResult {
   fileName: string;
   method: string | null;
   fallbackReason: string | null;
+  classifier: string | null;
   processingMs: number | null;
 }

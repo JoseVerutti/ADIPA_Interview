@@ -64,6 +64,11 @@ export function methodLabel(method: string | null): string {
   return "Reglas (respaldo)";
 }
 
+export function classifierLabel(classifier: string | null): string {
+  if (!classifier || classifier === "rules") return "Reglas";
+  return classifier === "jev" ? "Jev + reglas" : classifier;
+}
+
 export function countByType(questionnaire: Cuestionario): [TipoItem, number][] {
   const counts = new Map<TipoItem, number>();
   for (const item of questionnaire.items) counts.set(item.tipo, (counts.get(item.tipo) ?? 0) + 1);

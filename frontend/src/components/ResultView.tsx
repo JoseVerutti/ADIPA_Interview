@@ -1,6 +1,14 @@
 import { useState } from "react";
 import type { ExtractionResult } from "../types";
-import { TIPO_LABELS, countByType, downloadJson, languageName, methodLabel, toJson } from "../utils";
+import {
+  TIPO_LABELS,
+  classifierLabel,
+  countByType,
+  downloadJson,
+  languageName,
+  methodLabel,
+  toJson,
+} from "../utils";
 import { ItemCard } from "./ItemCard";
 
 type Tab = "items" | "json";
@@ -55,6 +63,12 @@ export function ResultView({ result }: { result: ExtractionResult }) {
           <dt>Extracción</dt>
           <dd>{methodLabel(result.method)}</dd>
         </div>
+        {result.classifier !== null && (
+          <div className="stat">
+            <dt>Clasificación</dt>
+            <dd>{classifierLabel(result.classifier)}</dd>
+          </div>
+        )}
         {result.processingMs !== null && (
           <div className="stat">
             <dt>Tiempo</dt>

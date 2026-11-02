@@ -54,6 +54,7 @@ export async function extractQuestionnaire(file: File, signal?: AbortSignal): Pr
     fileName: file.name,
     method: response.headers.get("X-Extraction-Method"),
     fallbackReason: response.headers.get("X-Fallback-Reason"),
+    classifier: response.headers.get("X-Classifier"),
     processingMs: Number.isFinite(processing) && processing > 0 ? processing : null,
   };
 }
