@@ -27,6 +27,9 @@ plataforma digital de administración y corrección de pruebas.
   (PDF escaneado), sin ítems detectables y fallas del proveedor de IA.
 - **Resiliencia**: si el LLM no está disponible (cuota agotada, caída o sin API key) se usa un extractor
   basado en reglas, para que el servicio siga respondiendo.
+- **Clasificación eficiente con Jev** (opcional): las decisiones de clasificación las toma
+  [Jev](https://docs.typesafe.ai) de TypeSafe AI, un modelo no generativo especializado en clasificar, en
+  lugar del LLM. Sin su API key, todo funciona igual con reglas.
 
 ## Arquitectura
 
@@ -51,6 +54,7 @@ backend/app/
 │   ├── llm_extraction_service.py     # Prompt, reintentos y autocorrección del JSON del LLM
 │   ├── llm/                          # Clientes Gemini y Groq (REST con httpx) y prompts
 │   ├── heuristic_extraction_service.py  # Extractor basado en reglas (respaldo)
+│   ├── classification/               # Decisiones de clasificación: Jev o clasificador nulo (reglas)
 │   ├── normalization_service.py      # Salida cruda → esquema estándar, con reglas deterministas
 │   └── language_detection_service.py # Detección de idioma por palabras funcionales
 ├── schemas/                      # Esquema de salida (estricto) e intermedio (tolerante)
@@ -64,20 +68,48 @@ backend/app/
 2. **Extracción de texto** preservando estructura útil: orden real de párrafos y tablas en Word,
    numeración automática de listas (Word no la guarda en el texto), **negrita** y ==resaltado== (pistas
    de respuesta correcta), y filas de tablas/hojas como `celda | celda | celda`.
-3. **Identificación de ítems con LLM** (Gemini por defecto, Groq como alternativa):
+3. **Filtro "¿es un cuestionario?"** (Jev, si está configurado): si es claramente otro tipo de documento
+   se responde `422` sin gastar una llamada al LLM.
+4. **Identificación de ítems con LLM** (Gemini por defecto, Groq como alternativa):
    - temperatura 0 y salida JSON estructurada (`responseSchema` en Gemini, modo JSON en Groq);
    - prompt con reglas explícitas por tipo, prohibición de inventar o "resolver" respuestas, y el
      documento delimitado como datos para mitigar *prompt injection*;
    - si el JSON es inválido se reintenta indicándole el error al modelo (autocorrección); errores
      transitorios (red, 5xx) se reintentan con espera; una cuota agotada (429) no se reintenta.
-4. **Respaldo heurístico** si el LLM falla o no está configurado (indicado en la cabecera
+5. **Respaldo heurístico** si el LLM falla o no está configurado (indicado en la cabecera
    `X-Extraction-Method: heuristic` y en la UI).
-5. **Normalización y validación**: reglas deterministas en código (no en el modelo) que garantizan una
+6. **Clasificación de ítems ambiguos e idioma** (reglas + Jev; ver abajo).
+7. **Normalización y validación**: reglas deterministas en código (no en el modelo) que garantizan una
    salida consistente sea cual sea el origen; finalmente se valida contra el esquema Pydantic estricto.
 
 Decisión de diseño clave: **el LLM solo propone; el código decide**. La normalización y el esquema
 estricto aseguran que la API nunca devuelva un JSON fuera de contrato (p. ej. una respuesta correcta que
 no corresponde a ninguna alternativa, o un ítem de desarrollo con alternativas).
+
+### Clasificación con Jev
+
+Clasificar ("¿es X o Y?") no requiere un modelo generativo. Por eso, **ninguna decisión de clasificación
+hace una llamada extra al LLM**. La cascada es: reglas deterministas (gratis) → Jev (solo si las reglas no
+alcanzan) → valor por defecto de las reglas.
+
+[Jev](https://docs.typesafe.ai) (TypeSafe AI) devuelve decisiones tipadas con probabilidades calibradas
+en ~0,1–0,5 s y cobra solo la entrada (US$ 0,042 por millón de tokens), muy por debajo de un LLM.
+
+| Decisión | Tipo de pregunta Jev | Cuándo se consulta |
+|---|---|---|
+| ¿El documento es un cuestionario? | `noul` (probabilidad sí/no) | Siempre, **antes** del LLM. Si `p < JEV_GATE_THRESHOLD` (0,1) se rechaza sin llamar al LLM |
+| Tipo de un ítem ambiguo | `choice` entre los tipos posibles | Solo ítems que las reglas no resuelven: alternativas sin tipo claro (¿selección múltiple o Likert?) o afirmaciones sin alternativas (¿desarrollo o verdadero/falso?) |
+| Idioma | `choice` entre idiomas | Solo si el detector determinístico no tiene señal y el LLM no lo informó |
+
+- Se acepta una elección solo si `confidence ≥ JEV_MIN_CONFIDENCE` (0,6) y está entre los tipos posibles
+  para ese ítem; si no, deciden las reglas.
+- Para ítems sin alternativas se agrega una opción "señuelo" (*autoinforme*, p. ej. "Me siento nervioso")
+  para que esas afirmaciones no se confundan con verdadero/falso.
+- Los ítems ambiguos se consultan en paralelo (una petición por ítem, como recomienda Jev) con
+  concurrencia acotada.
+- **Fail-open**: sin `JEV_API_KEY`, o si Jev falla (red, 401, 429/529 tras reintentar, respuesta
+  inesperada), el pipeline continúa con las reglas; Jev nunca hace fallar una petición. La cabecera
+  `X-Classifier` (`jev` o `rules`) y la UI indican qué se usó.
 
 ## Esquema de salida
 
@@ -157,6 +189,11 @@ Aplicación en `http://localhost:5173`.
 | `GROQ_API_KEY` | — | API key gratuita de [Groq](https://console.groq.com/keys) |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Modelo de Groq |
 | `HEURISTIC_FALLBACK` | `true` | Usar el extractor por reglas si el LLM falla |
+| `JEV_API_KEY` | — | Opcional. Key de Jev ([console.typesafe.ai](https://console.typesafe.ai)); también se acepta `TYPESAFE_API_KEY` |
+| `JEV_MODEL` | `jev-1.14.0` | Versión de Jev (fijada, porque los umbrales dependen del modelo) |
+| `JEV_MIN_CONFIDENCE` | `0.6` | Confianza mínima para aceptar una clasificación de Jev |
+| `JEV_GATE_THRESHOLD` | `0.1` | Probabilidad mínima de "es un cuestionario" para llamar al LLM |
+| `JEV_TIMEOUT_SECONDS` | `10` | Timeout por llamada a Jev |
 | `LLM_TIMEOUT_SECONDS` | `120` | Timeout por llamada al LLM |
 | `LLM_MAX_ATTEMPTS` | `2` | Intentos ante JSON inválido o errores transitorios |
 | `CORS_ORIGINS` | `http://localhost:5173,…` | Orígenes permitidos, separados por coma |
@@ -173,7 +210,7 @@ Las API keys se leen solo de variables de entorno; `.env` está en `.gitignore`.
 
 ```bash
 cd backend
-pytest                      # 111 tests
+pytest                      # 137 tests
 ruff check . && ruff format --check .
 ```
 
@@ -181,7 +218,8 @@ Cubren la validación de archivos (formatos, tamaño, archivos disfrazados o cor
 salida (contrato y reglas de coherencia), la extracción de texto de los 3 formatos, la detección de
 idioma, la normalización, el extractor heurístico, el servicio LLM (reintentos, autocorrección, cuota)
 con los clientes HTTP simulados, y la API de punta a punta (incluido el respaldo heurístico, los códigos
-de error y CORS). Los tests no usan red: los documentos se generan en memoria y el LLM se simula.
+de error y CORS) y la integración con Jev (formato de la API, reintentos, umbrales de confianza,
+filtro previo y funcionamiento sin key o con Jev caído). Los tests no usan red: los documentos se generan en memoria y el LLM se simula.
 
 ## API
 
@@ -192,7 +230,8 @@ curl -F "file=@examples/questionario_benessere_it.pdf" http://localhost:8000/api
 ```
 
 - `200` → JSON del esquema. Cabeceras: `X-Extraction-Method` (`llm:gemini`, `llm:groq` o `heuristic`),
-  `X-Fallback-Reason` (si se usó el respaldo), `X-Request-ID` y `X-Processing-Time-Ms`.
+  `X-Classifier` (`jev` o `rules`), `X-Fallback-Reason` (si se usó el respaldo), `X-Request-ID` y
+  `X-Processing-Time-Ms`.
 - Errores con cuerpo uniforme `{"error": {"code": "...", "message": "..."}}`:
 
 | HTTP | `code` | Cuándo |
@@ -201,11 +240,11 @@ curl -F "file=@examples/questionario_benessere_it.pdf" http://localhost:8000/api
 | 413 | `file_too_large` / `document_too_long` | Supera `MAX_FILE_SIZE_MB` / `MAX_TEXT_CHARS` |
 | 415 | `unsupported_file_type` | Extensión distinta de PDF, DOCX o XLSX (con sugerencia para .doc/.xls) |
 | 422 | `empty_document` | No hay texto extraíble (p. ej. PDF escaneado) |
-| 422 | `no_items_detected` | El documento no contiene ítems de cuestionario |
+| 422 | `no_items_detected` | El documento no contiene ítems de cuestionario (o Jev determinó que no es un cuestionario) |
 | 422 | `validation_error` | Falta el campo `file` |
 | 502 | `extraction_failed` | Falló el LLM y el respaldo está deshabilitado |
 
-`GET /api/v1/health` → estado del servicio y proveedor LLM activo.
+`GET /api/v1/health` → estado del servicio, proveedor LLM y clasificador activos.
 
 ## Ejemplos
 
@@ -231,7 +270,7 @@ python -m scripts.run_examples        # procesa cada documento con el mismo serv
 
 **Backend → Render** (plan gratuito). El repositorio incluye un blueprint [`render.yaml`](render.yaml):
 1. En Render: *New → Blueprint*, conecta el repositorio.
-2. Completa las variables secretas: `GEMINI_API_KEY` (y opcionalmente `GROQ_API_KEY`) y `CORS_ORIGINS`
+2. Completa las variables secretas: `GEMINI_API_KEY` (y opcionalmente `GROQ_API_KEY` y `JEV_API_KEY`) y `CORS_ORIGINS`
    con la URL del frontend (p. ej. `https://<app>.vercel.app`).
 3. El health check usa `/api/v1/health`.
 
