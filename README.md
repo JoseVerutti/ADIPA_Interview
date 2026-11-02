@@ -153,7 +153,7 @@ Aplicación en `http://localhost:5173`.
 |---|---|---|
 | `LLM_PROVIDER` | `gemini` | `gemini`, `groq` o `none` (solo heurístico) |
 | `GEMINI_API_KEY` | — | API key gratuita de [Google AI Studio](https://aistudio.google.com/apikey) |
-| `GEMINI_MODEL` | `gemini-2.5-flash` | Modelo de Gemini |
+| `GEMINI_MODEL` | `gemini-3.5-flash` | Modelo de Gemini (ver `GET /v1beta/models` para los disponibles) |
 | `GROQ_API_KEY` | — | API key gratuita de [Groq](https://console.groq.com/keys) |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Modelo de Groq |
 | `HEURISTIC_FALLBACK` | `true` | Usar el extractor por reglas si el LLM falla |

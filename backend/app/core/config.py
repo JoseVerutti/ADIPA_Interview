@@ -24,7 +24,7 @@ class Settings(BaseSettings):
 
     llm_provider: Literal["gemini", "groq", "none"] = "gemini"
     gemini_api_key: str | None = None
-    gemini_model: str = "gemini-2.5-flash"
+    gemini_model: str = "gemini-3.5-flash"
     groq_api_key: str | None = None
     groq_model: str = "llama-3.3-70b-versatile"
     llm_timeout_seconds: float = Field(default=120, gt=0)
