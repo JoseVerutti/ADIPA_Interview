@@ -1,0 +1,118 @@
+{
+  "titulo": "General Knowledge Quiz (sample)",
+  "idioma": "en",
+  "total_items": 6,
+  "items": [
+    {
+      "numero": 1,
+      "enunciado": "Which planet is known as the Red Planet?",
+      "tipo": "seleccion_multiple",
+      "alternativas": [
+        {
+          "valor": "A",
+          "texto": "Venus"
+        },
+        {
+          "valor": "B",
+          "texto": "Mars"
+        },
+        {
+          "valor": "C",
+          "texto": "Jupiter"
+        },
+        {
+          "valor": "D",
+          "texto": "Saturn"
+        }
+      ],
+      "respuesta_correcta": "B"
+    },
+    {
+      "numero": 2,
+      "enunciado": "How many continents are there on Earth?",
+      "tipo": "seleccion_multiple",
+      "alternativas": [
+        {
+          "valor": "A",
+          "texto": "5"
+        },
+        {
+          "valor": "B",
+          "texto": "6"
+        },
+        {
+          "valor": "C",
+          "texto": "7"
+        },
+        {
+          "valor": "D",
+          "texto": "8"
+        }
+      ],
+      "respuesta_correcta": "C"
+    },
+    {
+      "numero": 3,
+      "enunciado": "Water freezes at 0 °C at sea level.",
+      "tipo": "verdadero_falso",
+      "alternativas": [
+        {
+          "valor": "V",
+          "texto": "True"
+        },
+        {
+          "valor": "F",
+          "texto": "False"
+        }
+      ],
+      "respuesta_correcta": "V"
+    },
+    {
+      "numero": 4,
+      "enunciado": "The Pacific is the smallest ocean on Earth.",
+      "tipo": "verdadero_falso",
+      "alternativas": [
+        {
+          "valor": "V",
+          "texto": "True"
+        },
+        {
+          "valor": "F",
+          "texto": "False"
+        }
+      ],
+      "respuesta_correcta": "F"
+    },
+    {
+      "numero": 5,
+      "enunciado": "I enjoy learning new things.",
+      "tipo": "escala_likert",
+      "alternativas": [
+        {
+          "valor": 0,
+          "texto": "Strongly disagree"
+        },
+        {
+          "valor": 1,
+          "texto": "Disagree"
+        },
+        {
+          "valor": 2,
+          "texto": "Agree"
+        },
+        {
+          "valor": 3,
+          "texto": "Strongly agree"
+        }
+      ],
+      "respuesta_correcta": null
+    },
+    {
+      "numero": 6,
+      "enunciado": "Describe a book that changed your perspective.",
+      "tipo": "desarrollo",
+      "alternativas": [],
+      "respuesta_correcta": null
+    }
+  ]
+}

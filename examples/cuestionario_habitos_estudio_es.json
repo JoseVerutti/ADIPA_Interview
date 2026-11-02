@@ -1,0 +1,218 @@
+{
+  "titulo": "Cuestionario de hábitos de estudio (ejemplo)",
+  "idioma": "es",
+  "total_items": 11,
+  "items": [
+    {
+      "numero": 1,
+      "enunciado": "Planifico mis horas de estudio con anticipación.",
+      "tipo": "escala_likert",
+      "alternativas": [
+        {
+          "valor": 0,
+          "texto": "Nunca"
+        },
+        {
+          "valor": 1,
+          "texto": "A veces"
+        },
+        {
+          "valor": 2,
+          "texto": "Frecuentemente"
+        },
+        {
+          "valor": 3,
+          "texto": "Siempre"
+        }
+      ],
+      "respuesta_correcta": null
+    },
+    {
+      "numero": 2,
+      "enunciado": "Estudio en un lugar sin distracciones.",
+      "tipo": "escala_likert",
+      "alternativas": [
+        {
+          "valor": 0,
+          "texto": "Nunca"
+        },
+        {
+          "valor": 1,
+          "texto": "A veces"
+        },
+        {
+          "valor": 2,
+          "texto": "Frecuentemente"
+        },
+        {
+          "valor": 3,
+          "texto": "Siempre"
+        }
+      ],
+      "respuesta_correcta": null
+    },
+    {
+      "numero": 3,
+      "enunciado": "Repaso los contenidos antes de una evaluación.",
+      "tipo": "escala_likert",
+      "alternativas": [
+        {
+          "valor": 0,
+          "texto": "Nunca"
+        },
+        {
+          "valor": 1,
+          "texto": "A veces"
+        },
+        {
+          "valor": 2,
+          "texto": "Frecuentemente"
+        },
+        {
+          "valor": 3,
+          "texto": "Siempre"
+        }
+      ],
+      "respuesta_correcta": null
+    },
+    {
+      "numero": 4,
+      "enunciado": "¿Cuál es la capital de Chile?",
+      "tipo": "seleccion_multiple",
+      "alternativas": [
+        {
+          "valor": "A",
+          "texto": "Valparaíso"
+        },
+        {
+          "valor": "B",
+          "texto": "Santiago"
+        },
+        {
+          "valor": "C",
+          "texto": "Concepción"
+        }
+      ],
+      "respuesta_correcta": "B"
+    },
+    {
+      "numero": 5,
+      "enunciado": "¿Cuántos minutos tiene una hora?",
+      "tipo": "seleccion_multiple",
+      "alternativas": [
+        {
+          "valor": "A",
+          "texto": "30"
+        },
+        {
+          "valor": "B",
+          "texto": "60"
+        },
+        {
+          "valor": "C",
+          "texto": "100"
+        }
+      ],
+      "respuesta_correcta": "B"
+    },
+    {
+      "numero": 6,
+      "enunciado": "El agua hierve a 100 °C a nivel del mar.",
+      "tipo": "verdadero_falso",
+      "alternativas": [
+        {
+          "valor": "V",
+          "texto": "Verdadero"
+        },
+        {
+          "valor": "F",
+          "texto": "Falso"
+        }
+      ],
+      "respuesta_correcta": "V"
+    },
+    {
+      "numero": 7,
+      "enunciado": "La Luna es una estrella.",
+      "tipo": "verdadero_falso",
+      "alternativas": [
+        {
+          "valor": "V",
+          "texto": "Verdadero"
+        },
+        {
+          "valor": "F",
+          "texto": "Falso"
+        }
+      ],
+      "respuesta_correcta": "F"
+    },
+    {
+      "numero": 8,
+      "enunciado": "Perú",
+      "tipo": "emparejamiento",
+      "alternativas": [
+        {
+          "valor": "A",
+          "texto": "Montevideo"
+        },
+        {
+          "valor": "B",
+          "texto": "Lima"
+        },
+        {
+          "valor": "C",
+          "texto": "Buenos Aires"
+        }
+      ],
+      "respuesta_correcta": "B"
+    },
+    {
+      "numero": 9,
+      "enunciado": "Argentina",
+      "tipo": "emparejamiento",
+      "alternativas": [
+        {
+          "valor": "A",
+          "texto": "Montevideo"
+        },
+        {
+          "valor": "B",
+          "texto": "Lima"
+        },
+        {
+          "valor": "C",
+          "texto": "Buenos Aires"
+        }
+      ],
+      "respuesta_correcta": "C"
+    },
+    {
+      "numero": 10,
+      "enunciado": "Uruguay",
+      "tipo": "emparejamiento",
+      "alternativas": [
+        {
+          "valor": "A",
+          "texto": "Montevideo"
+        },
+        {
+          "valor": "B",
+          "texto": "Lima"
+        },
+        {
+          "valor": "C",
+          "texto": "Buenos Aires"
+        }
+      ],
+      "respuesta_correcta": "A"
+    },
+    {
+      "numero": 11,
+      "enunciado": "Explique qué técnica de estudio le resulta más efectiva y por qué.",
+      "tipo": "desarrollo",
+      "alternativas": [],
+      "respuesta_correcta": null
+    }
+  ]
+}

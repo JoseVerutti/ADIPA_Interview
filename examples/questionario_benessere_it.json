@@ -1,0 +1,169 @@
+{
+  "titulo": "Questionario di esempio sul benessere",
+  "idioma": "it",
+  "total_items": 9,
+  "items": [
+    {
+      "numero": 1,
+      "enunciado": "Mi preoccupo eccessivamente per cose di poca importanza.",
+      "tipo": "escala_likert",
+      "alternativas": [
+        {
+          "valor": 0,
+          "texto": "Mai"
+        },
+        {
+          "valor": 1,
+          "texto": "A volte"
+        },
+        {
+          "valor": 2,
+          "texto": "Spesso"
+        },
+        {
+          "valor": 3,
+          "texto": "Sempre"
+        }
+      ],
+      "respuesta_correcta": null
+    },
+    {
+      "numero": 2,
+      "enunciado": "Faccio fatica a rilassarmi alla fine della giornata.",
+      "tipo": "escala_likert",
+      "alternativas": [
+        {
+          "valor": 0,
+          "texto": "Mai"
+        },
+        {
+          "valor": 1,
+          "texto": "A volte"
+        },
+        {
+          "valor": 2,
+          "texto": "Spesso"
+        },
+        {
+          "valor": 3,
+          "texto": "Sempre"
+        }
+      ],
+      "respuesta_correcta": null
+    },
+    {
+      "numero": 3,
+      "enunciado": "Mi sento soddisfatto delle mie relazioni personali.",
+      "tipo": "escala_likert",
+      "alternativas": [
+        {
+          "valor": 0,
+          "texto": "Mai"
+        },
+        {
+          "valor": 1,
+          "texto": "A volte"
+        },
+        {
+          "valor": 2,
+          "texto": "Spesso"
+        },
+        {
+          "valor": 3,
+          "texto": "Sempre"
+        }
+      ],
+      "respuesta_correcta": null
+    },
+    {
+      "numero": 4,
+      "enunciado": "Quale numero completa la serie: 2, 4, 8, 16, ...?",
+      "tipo": "seleccion_multiple",
+      "alternativas": [
+        {
+          "valor": "A",
+          "texto": "18"
+        },
+        {
+          "valor": "B",
+          "texto": "24"
+        },
+        {
+          "valor": "C",
+          "texto": "32"
+        }
+      ],
+      "respuesta_correcta": "C"
+    },
+    {
+      "numero": 5,
+      "enunciado": "Quale parola non appartiene al gruppo?",
+      "tipo": "seleccion_multiple",
+      "alternativas": [
+        {
+          "valor": "A",
+          "texto": "Mela"
+        },
+        {
+          "valor": "B",
+          "texto": "Pera"
+        },
+        {
+          "valor": "C",
+          "texto": "Carota"
+        },
+        {
+          "valor": "D",
+          "texto": "Banana"
+        }
+      ],
+      "respuesta_correcta": "C"
+    },
+    {
+      "numero": 6,
+      "enunciado": "Il sole sorge a est.",
+      "tipo": "verdadero_falso",
+      "alternativas": [
+        {
+          "valor": "V",
+          "texto": "Vero"
+        },
+        {
+          "valor": "F",
+          "texto": "Falso"
+        }
+      ],
+      "respuesta_correcta": "V"
+    },
+    {
+      "numero": 7,
+      "enunciado": "Un triangolo ha quattro lati.",
+      "tipo": "verdadero_falso",
+      "alternativas": [
+        {
+          "valor": "V",
+          "texto": "Vero"
+        },
+        {
+          "valor": "F",
+          "texto": "Falso"
+        }
+      ],
+      "respuesta_correcta": "F"
+    },
+    {
+      "numero": 8,
+      "enunciado": "Descriva una situazione recente in cui si è sentito sotto pressione.",
+      "tipo": "desarrollo",
+      "alternativas": [],
+      "respuesta_correcta": null
+    },
+    {
+      "numero": 9,
+      "enunciado": "Quali strategie utilizza per gestire lo stress?",
+      "tipo": "desarrollo",
+      "alternativas": [],
+      "respuesta_correcta": null
+    }
+  ]
+}
