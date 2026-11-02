@@ -1,0 +1,24 @@
+[project]
+name = "questionnaire-extractor-api"
+version = "1.0.0"
+description = "API FastAPI que extrae ítems de cuestionarios (PDF, DOCX, XLSX) a un JSON estandarizado."
+requires-python = ">=3.11"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = [
+    "ignore::DeprecationWarning:fpdf.*",
+    "ignore:Using `httpx` with `starlette.testclient`",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF"]
+# B008: Depends()/File() en la firma es el patrón idiomático de FastAPI.
+# RUF001-003: los textos en español/italiano usan caracteres "ambiguos" legítimos (–, ’, °).
+# SIM108: se prefiere un if/else explícito cuando el ternario quedaría ilegible.
+ignore = ["B008", "RUF001", "RUF002", "RUF003", "SIM108"]
