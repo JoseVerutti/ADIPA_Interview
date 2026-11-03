@@ -86,8 +86,9 @@ async def main() -> int:
         models = await client.list_models()
         print(f"   {', '.join(models) or '(lista vacía)'}")
         if models and settings.jev_model not in models:
-            print(f"   ✗ {settings.jev_model} no aparece en la lista: ajusta JEV_MODEL")
-            failures += 1
+            # La API solo lista alias (jev-latest, jev-preview); las versiones fijadas como
+            # jev-1.14.0 también funcionan. Las llamadas siguientes lo verifican.
+            print(f"   i {settings.jev_model} no está listado (solo se listan alias); lo verifican las llamadas")
     except ClassifierError as exc:
         print(f"   ✗ {exc}")
         if "401" in str(exc) or "403" in str(exc):

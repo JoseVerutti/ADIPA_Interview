@@ -294,6 +294,7 @@ def test_client_lists_models():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.method == "GET"
         assert request.headers["authorization"] == "Bearer jev-secret"
-        return httpx.Response(200, json={"data": [{"id": "jev-1.14.0"}, {"id": "jev-1.13.0"}]})
+        # Formato real de la API (verificado): solo alias, con la clave "name".
+        return httpx.Response(200, json={"models": [{"name": "jev-latest"}, {"name": "jev-preview"}]})
 
-    assert run(jev_client(handler).list_models()) == ["jev-1.14.0", "jev-1.13.0"]
+    assert run(jev_client(handler).list_models()) == ["jev-latest", "jev-preview"]

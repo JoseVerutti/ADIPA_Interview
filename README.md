@@ -174,7 +174,17 @@ hace una llamada extra al LLM**. La cascada es: reglas deterministas (gratis) �
 alcanzan) → valor por defecto de las reglas.
 
 [Jev](https://docs.typesafe.ai) (TypeSafe AI) devuelve decisiones tipadas con probabilidades calibradas
-en ~0,1–0,5 s y cobra solo la entrada (US$ 0,042 por millón de tokens), muy por debajo de un LLM.
+y cobra solo la entrada (US$ 0,042 por millón de tokens), muy por debajo de un LLM.
+
+Resultados medidos contra la API real (`python -m scripts.check_jev` y pruebas de punta a punta):
+
+| Prueba | Resultado |
+|---|---|
+| Filtro sobre los 3 ejemplos (es, it, en) | Pasan con p = 0,99–1,00 |
+| Filtro sobre textos que no son cuestionarios (informe, receta, factura) | Rechazados con p = 0,01–0,02, en ~1 s y sin llamar al LLM (que tarda 13–40 s) |
+| Ítems ambiguos y detección de idioma en los 3 idiomas | 11 de 11 correctos |
+| LLM caído, documento con afirmaciones V/F sin marcar | Solo reglas: las clasifica como desarrollo. Con Jev: verdadero/falso (+1,6 s) |
+| Costo en latencia del filtro | ~0,85–1,0 s por documento, red incluida |
 
 | Decisión | Tipo de pregunta Jev | Cuándo se consulta |
 |---|---|---|

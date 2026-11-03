@@ -54,7 +54,9 @@ class JevClient:
             raise ClassifierError(f"jev: HTTP {response.status_code}: {response.text[:200]}")
         data = response.json()
         entries = data.get("data", data.get("models", [])) if isinstance(data, dict) else data
-        return [entry.get("id", "") if isinstance(entry, dict) else str(entry) for entry in entries or []]
+        # La API responde {"models": [{"name": "jev-latest", ...}]}: solo lista los alias.
+        names = [entry.get("name") or entry.get("id") if isinstance(entry, dict) else entry for entry in entries or []]
+        return [str(name) for name in names if name]
 
     async def ask(self, state: Any, questions: dict[str, dict]) -> dict[str, dict]:
         """Una petición; lanza ``ClassifierError`` si falla."""
