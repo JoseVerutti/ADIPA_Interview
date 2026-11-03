@@ -1,0 +1,15 @@
+# Secretos y entorno local: nunca se suben (las keys se configuran como variables en Vercel).
+.env
+.env.*
+.venv/
+
+# Solo hace falta el código de la app y requirements.txt.
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+tests/
+scripts/
+requirements-dev.txt
+pyproject.toml
+Dockerfile
+.dockerignore

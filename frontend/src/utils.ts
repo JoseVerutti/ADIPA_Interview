@@ -1,7 +1,8 @@
 import type { Cuestionario, TipoItem } from "./types";
 
 export const ACCEPTED_EXTENSIONS = [".pdf", ".docx", ".xlsx"] as const;
-export const MAX_FILE_SIZE_MB = 10;
+// Debe coincidir con MAX_FILE_SIZE_MB del backend (en Vercel, 4 MB por el límite de 4,5 MB por petición).
+export const MAX_FILE_SIZE_MB = Number(import.meta.env.VITE_MAX_FILE_SIZE_MB) || 10;
 
 export const TIPO_LABELS: Record<TipoItem, string> = {
   escala_likert: "Escala Likert",
