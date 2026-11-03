@@ -65,7 +65,7 @@ class FakeClassifier:
 def make_settings() -> Callable[..., Settings]:
     def _make(**overrides) -> Settings:
         # Sin keys explícitamente: los tests nunca deben llamar a servicios externos reales.
-        values = {"llm_provider": "none", "heuristic_fallback": True, "jev_api_key": None} | overrides
+        values = {"gemini_api_key": None, "heuristic_fallback": True, "jev_api_key": None} | overrides
         return Settings(_env_file=None, **values)
 
     return _make

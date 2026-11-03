@@ -12,7 +12,6 @@ from app.services.heuristic_extraction_service import HeuristicExtractionService
 from app.services.language_detection_service import LanguageDetectionService
 from app.services.llm.base import LLMClient
 from app.services.llm.gemini_client import GeminiClient
-from app.services.llm.groq_client import GroqClient
 from app.services.llm_extraction_service import LLMExtractionService
 from app.services.normalization_service import QuestionnaireNormalizer
 from app.services.questionnaire_service import QuestionnaireService
@@ -22,16 +21,10 @@ logger = logging.getLogger(__name__)
 
 
 def build_llm_client(settings: Settings) -> LLMClient | None:
-    if settings.llm_provider == "gemini" and settings.gemini_api_key:
-        return GeminiClient(settings.gemini_api_key, settings.gemini_model, settings.llm_timeout_seconds)
-    if settings.llm_provider == "groq" and settings.groq_api_key:
-        return GroqClient(settings.groq_api_key, settings.groq_model, settings.llm_timeout_seconds)
-    if settings.llm_provider != "none":
-        logger.warning(
-            "LLM_PROVIDER=%s pero falta su API key: se usará solo el extractor heurístico.",
-            settings.llm_provider,
-        )
-    return None
+    if not settings.gemini_api_key:
+        logger.warning("Sin GEMINI_API_KEY: los ítems se extraerán solo con el extractor heurístico.")
+        return None
+    return GeminiClient(settings.gemini_api_key, settings.gemini_model, settings.llm_timeout_seconds)
 
 
 def build_classifier(settings: Settings) -> Classifier:

@@ -191,7 +191,7 @@ npm run dev                        # http://localhost:5173
 | `CORS_ORIGINS` | `http://localhost:5173` | URL del frontend (separadas por coma) |
 | `VITE_API_URL` | `http://localhost:8000` | En `frontend/.env`: URL del backend |
 
-El resto de opciones (Groq como LLM alternativo, umbrales de Jev, timeouts y límites de tamaño) tienen
+El resto de opciones (umbrales de Jev, timeouts y límites de tamaño) tienen
 valores por defecto y están documentadas en [`backend/.env.example`](backend/.env.example). Las API keys
 se leen solo de variables de entorno; `.env` está en `.gitignore`.
 

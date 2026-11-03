@@ -1,7 +1,6 @@
 """Configuración de la aplicación, leída desde variables de entorno (o un archivo .env)."""
 
 from functools import lru_cache
-from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -22,11 +21,9 @@ class Settings(BaseSettings):
     max_file_size_mb: float = Field(default=10, gt=0)
     max_text_chars: int = Field(default=120_000, gt=0)
 
-    llm_provider: Literal["gemini", "groq", "none"] = "gemini"
+    # Gemini (LLM). Sin API key los ítems se extraen solo con reglas.
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-3.5-flash"
-    groq_api_key: str | None = None
-    groq_model: str = "llama-3.3-70b-versatile"
     llm_timeout_seconds: float = Field(default=120, gt=0)
     llm_max_attempts: int = Field(default=2, ge=1, le=5)
 

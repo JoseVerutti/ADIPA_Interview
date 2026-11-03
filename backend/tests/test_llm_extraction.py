@@ -6,7 +6,6 @@ import pytest
 
 from app.core.exceptions import LLMError, LLMOutputError, LLMRateLimitError
 from app.services.llm.gemini_client import GeminiClient
-from app.services.llm.groq_client import GroqClient
 from app.services.llm_extraction_service import LLMExtractionService, parse_llm_output
 from tests.conftest import FakeLLMClient
 
@@ -110,19 +109,8 @@ def test_gemini_429_maps_to_rate_limit_error():
         run(client.generate_json("sys", "user"))
 
 
-def test_groq_client_uses_json_mode():
-    captured: list[httpx.Request] = []
-    body = {"choices": [{"finish_reason": "stop", "message": {"content": '{"items": []}'}}]}
-    client = GroqClient("gsk-test", "llama-test", transport=_transport(200, body, captured))
-
-    assert run(client.generate_json("sys", "user")) == '{"items": []}'
-    payload = json.loads(captured[0].content)
-    assert payload["response_format"] == {"type": "json_object"}
-    assert captured[0].headers["authorization"] == "Bearer gsk-test"
-
-
-def test_groq_server_error_is_retryable():
-    client = GroqClient("k", "m", transport=_transport(503, {}, []))
+def test_gemini_server_error_is_retryable():
+    client = GeminiClient("k", "m", transport=_transport(503, {}, []))
     with pytest.raises(LLMError) as error:
         run(client.generate_json("sys", "user"))
     assert error.value.retryable
