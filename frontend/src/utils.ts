@@ -20,7 +20,7 @@ export const ERROR_TITLES: Record<string, string> = {
   document_too_long: "Documento demasiado extenso",
   no_items_detected: "No se detectaron ítems",
   extraction_failed: "No se pudo procesar el documento",
-  network_error: "Sin conexión con el servidor",
+  network_error: "No se pudo contactar con el servidor",
   validation_error: "Solicitud inválida",
 };
 

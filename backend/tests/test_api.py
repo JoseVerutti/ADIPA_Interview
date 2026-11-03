@@ -131,3 +131,20 @@ def test_cors_allows_configured_origin_and_exposes_headers(make_client):
         headers={"Origin": "https://front.example.com"},
     )
     assert "X-Extraction-Method" in result.headers["access-control-expose-headers"]
+
+
+def test_cors_regex_allows_deployment_urls_also_on_errors(make_client):
+    # Vercel sirve el frontend también en URLs por despliegue; sin la cabecera CORS el navegador
+    # oculta la respuesta (p. ej. un 422) y el frontend solo ve un fallo de red.
+    client = make_client(
+        cors_origins="https://app.example.com",
+        cors_origin_regex=r"https://app-[a-z0-9-]+-team\.example\.com",
+    )
+    files = {"file": ("vacio.pdf", pdf_bytes([]), PDF_MIME)}
+    allowed = "https://app-g86blnqbn-team.example.com"
+    response = client.post(ENDPOINT, files=files, headers={"Origin": allowed})
+    assert response.status_code == 422
+    assert response.headers["access-control-allow-origin"] == allowed
+
+    other = client.post(ENDPOINT, files=files, headers={"Origin": "https://evil.example.com"})
+    assert "access-control-allow-origin" not in other.headers

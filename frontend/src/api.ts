@@ -25,9 +25,11 @@ export async function extractQuestionnaire(file: File, signal?: AbortSignal): Pr
     response = await fetch(`${API_URL}/api/v1/questionnaires/extract`, { method: "POST", body, signal });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
+    // fetch no distingue un fallo de red de una respuesta bloqueada por CORS: ambos llegan aquí.
     throw new ApiError(
       "network_error",
-      "No se pudo conectar con el servidor. Revisa tu conexión e inténtalo de nuevo en unos segundos.",
+      "No se pudo leer la respuesta del servidor. Revisa tu conexión e inténtalo de nuevo; si persiste, " +
+        "es posible que el servidor no acepte peticiones desde esta dirección (CORS).",
     );
   }
 

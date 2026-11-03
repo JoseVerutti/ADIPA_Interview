@@ -245,7 +245,9 @@ Para regenerarlos, desde `backend/`: `python -m scripts.generate_examples` y lue
 Desplegado en **Vercel** (plan gratuito) como dos proyectos, cada uno con su `vercel.json`:
 
 - **Backend** (`backend/`): función Python con FastAPI. Variables: `GEMINI_API_KEY`, `JEV_API_KEY`,
-  `CORS_ORIGINS` (URL del frontend) y `MAX_FILE_SIZE_MB=4`, porque Vercel limita las peticiones a 4,5 MB.
+  `CORS_ORIGINS` (URL del frontend), `CORS_ORIGIN_REGEX` (las URLs por despliegue que Vercel también
+  publica, `https://adipa-interview-[a-z0-9-]+-joseveruttis-projects\.vercel\.app`) y `MAX_FILE_SIZE_MB=4`,
+  porque Vercel limita las peticiones a 4,5 MB.
 - **Frontend** (`frontend/`): sitio estático de Vite. Variables: `VITE_API_URL` (URL del backend) y
   `VITE_MAX_FILE_SIZE_MB=4`.
 
