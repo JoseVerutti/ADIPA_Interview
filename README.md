@@ -33,12 +33,59 @@ plataforma digital de administración y corrección de pruebas.
 
 ## Arquitectura
 
-```
-frontend/  React + Vite + TypeScript  ──POST /api/v1/questionnaires/extract──▶  backend/  FastAPI
+```mermaid
+flowchart LR
+    user(["Usuario"])
+
+    subgraph FE["Frontend · React + Vite · Vercel"]
+        ui["UI<br/>adjuntar archivo · ver ítems · descargar JSON"]
+    end
+
+    subgraph BE["Backend · FastAPI · Render"]
+        direction TB
+        ctrl["Controladores<br/>POST /api/v1/questionnaires/extract<br/>GET /api/v1/health"]
+        orch["QuestionnaireService<br/>orquestador del pipeline"]
+        subgraph SV["Servicios · sin repositorios, todo en memoria"]
+            direction TB
+            val["FileValidationService<br/>extensión · tamaño · firma binaria"]
+            txt["TextExtractionService<br/>pypdf · python-docx · openpyxl"]
+            cls["Classifier<br/>JevClassifier o NoopClassifier"]
+            llm["LLMExtractionService<br/>prompt · reintentos · autocorrección"]
+            heur["HeuristicExtractionService<br/>extractor por reglas"]
+            lang["LanguageDetectionService<br/>palabras funcionales"]
+            norm["QuestionnaireNormalizer<br/>reglas + esquema Pydantic estricto"]
+        end
+    end
+
+    subgraph EXT["Servicios externos"]
+        gemini["Google Gemini<br/>gemini-3.5-flash"]
+        groq["Groq<br/>proveedor alternativo"]
+        jev["Jev · TypeSafe AI<br/>clasificador"]
+    end
+
+    user -->|"arrastra el documento"| ui
+    ui -->|"multipart/form-data"| ctrl
+    ctrl -->|"JSON + X-Extraction-Method / X-Classifier"| ui
+    ctrl -->|"delega"| orch
+    orch -->|"1 · validar"| val
+    orch -->|"2 · extraer texto"| txt
+    orch -->|"3 · ¿es cuestionario?<br/>5 · tipos ambiguos"| cls
+    orch -->|"4 · extraer ítems"| llm
+    orch -.->|"4b · respaldo si el LLM falla"| heur
+    orch -->|"6 · idioma"| lang
+    orch -->|"7 · normalizar y validar"| norm
+    llm -->|"HTTPS · salida JSON estructurada"| gemini
+    llm -.->|"si LLM_PROVIDER=groq"| groq
+    cls -.->|"solo con JEV_API_KEY"| jev
+
+    classDef external stroke-dasharray: 5 4
+    class gemini,groq,jev external
 ```
 
 El backend sigue una arquitectura simple de **controladores → servicios**. No hay capa de repositorios:
-el documento se procesa en memoria y nada se almacena.
+el documento se procesa en memoria y nada se almacena. Los números de las flechas indican el orden del
+pipeline; las líneas punteadas son dependencias opcionales o de respaldo, y los servicios externos tienen
+borde discontinuo.
 
 ```
 backend/app/
@@ -62,6 +109,40 @@ backend/app/
 ```
 
 ### Pipeline de extracción
+
+Recorrido de una petición, con cada punto de decisión y la respuesta de error que produce:
+
+```mermaid
+flowchart TD
+    A(["Usuario adjunta un PDF, DOCX o XLSX"]) --> B{"¿Extensión y tamaño válidos?<br/>validación en el navegador"}
+    B -->|"no"| B1["Error inmediato en la UI,<br/>sin llamar al servidor"]
+    B -->|"sí"| C["POST /api/v1/questionnaires/extract"]
+    C --> D{"¿Extensión, tamaño y firma<br/>binaria correctos?"}
+    D -->|"no"| D1["400 invalid_file · 413 file_too_large<br/>415 unsupported_file_type"]
+    D -->|"sí"| E["Extraer texto<br/>conserva tablas, numeración y resaltado"]
+    E --> F{"¿Hay texto y cabe en<br/>MAX_TEXT_CHARS?"}
+    F -->|"no"| F1["422 empty_document<br/>413 document_too_long"]
+    F -->|"sí"| G{"¿JEV_API_KEY configurada?"}
+    G -->|"sí"| H{"Jev: probabilidad de que<br/>sea un cuestionario ≥ 0,1"}
+    H -->|"no"| H1["422 no_items_detected<br/>sin gastar una llamada al LLM"]
+    H -->|"sí, o Jev no responde"| I
+    G -->|"no"| I{"¿LLM configurado?"}
+    I -->|"sí"| J["Gemini extrae los ítems<br/>JSON estructurado, reintentos y autocorrección"]
+    J --> K{"¿Respuesta válida?"}
+    K -->|"no: cuota, 503 o timeout"| L["Extractor heurístico por reglas"]
+    K -->|"no y HEURISTIC_FALLBACK=false"| K1["502 extraction_failed"]
+    I -->|"no"| L
+    K -->|"sí"| M{"¿Hay ítems cuyo tipo<br/>las reglas no deciden?"}
+    L --> M
+    M -->|"sí"| N["Jev elige el tipo si hay key y confianza ≥ 0,6;<br/>si no, deciden las reglas"]
+    M -->|"no"| O
+    N --> O["Idioma: detector determinístico,<br/>luego el LLM, luego Jev"]
+    O --> P["Normalizar valores y respuestas,<br/>validar contra el esquema"]
+    P --> Q{"¿Al menos un ítem válido?"}
+    Q -->|"no"| Q1["422 no_items_detected"]
+    Q -->|"sí"| R(["200 · JSON estandarizado<br/>+ X-Extraction-Method y X-Classifier"])
+    R --> S["UI: vista por ítem o JSON,<br/>copiar y descargar"]
+```
 
 1. **Validación del archivo**: extensión permitida, tamaño máximo y verificación de que los bytes
    correspondan realmente al formato (un `.txt` renombrado a `.pdf` se rechaza).
