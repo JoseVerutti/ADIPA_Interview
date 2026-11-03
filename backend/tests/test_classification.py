@@ -288,3 +288,12 @@ def test_without_jev_key_the_header_reports_rules(make_client):
     response = upload(make_client())
     assert response.status_code == 200
     assert response.headers["X-Classifier"] == "rules"
+
+
+def test_client_lists_models():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.headers["authorization"] == "Bearer jev-secret"
+        return httpx.Response(200, json={"data": [{"id": "jev-1.14.0"}, {"id": "jev-1.13.0"}]})
+
+    assert run(jev_client(handler).list_models()) == ["jev-1.14.0", "jev-1.13.0"]

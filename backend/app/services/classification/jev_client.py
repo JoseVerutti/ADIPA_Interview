@@ -18,6 +18,7 @@ from app.core.exceptions import ClassifierError
 logger = logging.getLogger(__name__)
 
 JEV_URL = "https://api.typesafe.ai/v1/systemone"
+JEV_MODELS_URL = "https://api.typesafe.ai/v1/models"
 _RETRYABLE_STATUS = {429, 529}
 _MAX_RETRY_DELAY_SECONDS = 2.0
 
@@ -41,6 +42,19 @@ class JevClient:
         self._max_attempts = max_attempts
         self._max_concurrency = max_concurrency
         self._transport = transport
+
+    async def list_models(self) -> list[str]:
+        """IDs de los modelos disponibles para la key (GET /v1/models). Útil para diagnóstico."""
+        try:
+            async with httpx.AsyncClient(timeout=self._timeout, transport=self._transport) as http:
+                response = await http.get(JEV_MODELS_URL, headers={"Authorization": f"Bearer {self._api_key}"})
+        except httpx.HTTPError as exc:
+            raise ClassifierError(f"jev: error de red ({exc.__class__.__name__})", retryable=True) from exc
+        if response.status_code != 200:
+            raise ClassifierError(f"jev: HTTP {response.status_code}: {response.text[:200]}")
+        data = response.json()
+        entries = data.get("data", data.get("models", [])) if isinstance(data, dict) else data
+        return [entry.get("id", "") if isinstance(entry, dict) else str(entry) for entry in entries or []]
 
     async def ask(self, state: Any, questions: dict[str, dict]) -> dict[str, dict]:
         """Una petición; lanza ``ClassifierError`` si falla."""

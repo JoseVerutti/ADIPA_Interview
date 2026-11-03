@@ -111,6 +111,16 @@ en ~0,1–0,5 s y cobra solo la entrada (US$ 0,042 por millón de tokens), muy p
   inesperada), el pipeline continúa con las reglas; Jev nunca hace fallar una petición. La cabecera
   `X-Classifier` (`jev` o `rules`) y la UI indican qué se usó.
 
+Para verificar la key y calibrar los umbrales contra la API real (desde `backend/`):
+
+```bash
+python -m scripts.check_jev
+```
+
+El script lista los modelos disponibles para la key y pasa por el filtro los ejemplos y tres textos que
+no son cuestionarios. También clasifica ítems ambiguos y detecta el idioma en español, italiano e inglés,
+e informa cada acierto o fallo.
+
 ## Esquema de salida
 
 Respeta exactamente el formato del enunciado:
@@ -210,7 +220,7 @@ Las API keys se leen solo de variables de entorno; `.env` está en `.gitignore`.
 
 ```bash
 cd backend
-pytest                      # 137 tests
+pytest                      # 138 tests
 ruff check . && ruff format --check .
 ```
 
