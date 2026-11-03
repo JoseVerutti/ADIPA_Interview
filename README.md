@@ -5,11 +5,11 @@ tipos, alternativas y respuestas correctas en un **JSON estandarizado**.
 
 | | URL |
 |---|---|
-| **Aplicación (frontend)** | `https://<pendiente>.vercel.app` |
-| **API (backend)** | `https://<pendiente>.onrender.com` · documentación interactiva en `/docs` |
+| **Aplicación (frontend)** | https://adipa-interview.vercel.app |
+| **API (backend)** | https://adipa-interview-api.vercel.app · documentación interactiva en [`/docs`](https://adipa-interview-api.vercel.app/docs) |
 
-> El backend usa el plan gratuito de Render: tras un rato de inactividad se suspende y la primera
-> petición puede tardar ~50 s. La UI avisa cuando esto ocurre.
+> Ambos corren en el plan gratuito de Vercel. El plan gratuito de Gemini permite 20 peticiones por día;
+> si se agotan, la app sigue respondiendo con el extractor por reglas y la UI lo indica.
 
 ## Funcionalidades
 
@@ -210,7 +210,7 @@ y `X-Classifier` (`jev` o `rules`) indican qué se usó. Los errores tienen el f
 | HTTP | `code` | Cuándo |
 |---|---|---|
 | 400 | `invalid_file` | Archivo vacío, dañado, protegido o cuyo contenido no coincide con la extensión |
-| 413 | `file_too_large` / `document_too_long` | Archivo de más de 10 MB o texto demasiado extenso |
+| 413 | `file_too_large` / `document_too_long` | Archivo de más de 10 MB (4 MB en el despliegue) o texto demasiado extenso |
 | 415 | `unsupported_file_type` | Formato distinto de PDF, DOCX o XLSX |
 | 422 | `empty_document` | Sin texto extraíble (p. ej. PDF escaneado) |
 | 422 | `no_items_detected` | El documento no contiene ítems de cuestionario |
@@ -242,11 +242,19 @@ Para regenerarlos, desde `backend/`: `python -m scripts.generate_examples` y lue
 
 ## Deploy
 
-- **Backend → Render**: *New → Blueprint* con el [`render.yaml`](render.yaml) del repositorio. Completa
-  `GEMINI_API_KEY`, `JEV_API_KEY` (opcional) y `CORS_ORIGINS` con la URL del frontend. También hay un
-  `backend/Dockerfile` para otras plataformas.
-- **Frontend → Vercel**: importa el repositorio con **Root Directory = `frontend`** y define
-  `VITE_API_URL` con la URL del backend.
+Desplegado en **Vercel** (plan gratuito) como dos proyectos, cada uno con su `vercel.json`:
+
+- **Backend** (`backend/`): función Python con FastAPI. Variables: `GEMINI_API_KEY`, `JEV_API_KEY`,
+  `CORS_ORIGINS` (URL del frontend) y `MAX_FILE_SIZE_MB=4`, porque Vercel limita las peticiones a 4,5 MB.
+- **Frontend** (`frontend/`): sitio estático de Vite. Variables: `VITE_API_URL` (URL del backend) y
+  `VITE_MAX_FILE_SIZE_MB=4`.
+
+```bash
+npx vercel deploy --prod --cwd backend
+npx vercel deploy --prod --cwd frontend
+```
+
+El backend también incluye un `Dockerfile` para desplegarlo en cualquier plataforma de contenedores.
 
 ## Supuestos
 
