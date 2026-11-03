@@ -12,7 +12,7 @@ import logging
 
 from app.core.exceptions import ClassifierError
 from app.schemas.questionnaire import TipoItem
-from app.services.classification.base import TypeQuery
+from app.services.classification.base import ItemQuery, ItemReview
 from app.services.classification.jev_client import JevClient
 
 logger = logging.getLogger(__name__)
@@ -32,6 +32,20 @@ _GATE_QUESTION = {
         "matching or open-ended questions.",
         "false": "It is another kind of document (report, article, letter, invoice, notes...) with "
         "nothing for a respondent to answer.",
+    },
+}
+
+_IS_ITEM_QUESTION = {
+    "type": "noul",
+    "instructions": (
+        "This entry was extracted from a questionnaire. Is it an actual item that the respondent must "
+        "answer (a question, or a statement to rate, judge true/false or match), rather than an "
+        "instruction, a section title, or a personal-data field such as name, age, date or signature? "
+        "The entry may be written in Spanish, Italian or English."
+    ),
+    "criteria": {
+        "true": "A question or statement the respondent answers, with or without answer options.",
+        "false": "An instruction, heading, section title, note, or a field for personal data.",
     },
 }
 
@@ -82,28 +96,35 @@ class JevClassifier:
         except ClassifierError as exc:
             logger.warning("Jev no disponible para el filtro inicial; se continúa sin él: %s", exc)
             return None
-        value = (answers.get("is_questionnaire") or {}).get("noul")
-        if not isinstance(value, int | float) or isinstance(value, bool) or not 0 <= value <= 1:
+        probability = _probability(answers.get("is_questionnaire"))
+        if probability is None:
             logger.warning("Jev: respuesta inesperada en el filtro inicial: %r", answers)
-            return None
-        return float(value)
+        return probability
 
-    async def classify_item_types(self, queries: list[TypeQuery]) -> list[TipoItem | None]:
+    async def review_items(self, queries: list[ItemQuery]) -> list[ItemReview]:
+        """Revisa cada ítem con dos preguntas en una sola petición: ¿es un ítem real? y ¿de qué tipo?
+
+        Una petición por ítem (recomendación de Jev: el contexto ajeno degrada la precisión),
+        ejecutadas en paralelo sobre una única conexión.
+        """
         if not queries:
             return []
-        # Una petición por ítem (recomendación de Jev: el contexto ajeno degrada la precisión),
-        # ejecutadas en paralelo sobre una única conexión.
-        requests = [(self._item_state(query), {"tipo": self._type_question(query)}) for query in queries]
+        requests = [(self._item_state(query), self._item_questions(query)) for query in queries]
         results = await self._client.ask_many(requests)
 
-        decisions: list[TipoItem | None] = []
+        reviews: list[ItemReview] = []
         for query, result in zip(queries, results, strict=True):
             if isinstance(result, ClassifierError):
-                logger.warning("Jev no pudo clasificar un ítem; se usan las reglas: %s", result)
-                decisions.append(None)
+                logger.warning("Jev no pudo revisar un ítem; se usa lo que propone el extractor: %s", result)
+                reviews.append(ItemReview())
                 continue
-            decisions.append(self._type_decision(result.get("tipo"), query))
-        return decisions
+            reviews.append(
+                ItemReview(
+                    is_item_probability=_probability(result.get("is_item")),
+                    tipo=self._type_decision(result.get("tipo"), query),
+                )
+            )
+        return reviews
 
     async def detect_language(self, text: str) -> str | None:
         try:
@@ -116,17 +137,24 @@ class JevClassifier:
 
     # ------------------------------------------------------------------ helpers
     @staticmethod
-    def _item_state(query: TypeQuery) -> dict:
-        return {"item": query.enunciado, "answer_options": query.alternativas}
+    def _item_state(query: ItemQuery) -> dict:
+        state: dict = {"entry": query.enunciado, "answer_options": query.alternativas}
+        if query.siblings:
+            # Medido contra la API: sin este contexto Jev confunde emparejamiento con selección múltiple.
+            state["other_entries_sharing_these_options"] = query.siblings
+        return state
 
     @staticmethod
-    def _type_question(query: TypeQuery) -> dict:
-        # El orden importa (Jev favorece levemente la primera opción): va primero lo que
-        # decidirían las reglas, que es la opción conservadora.
+    def _item_questions(query: ItemQuery) -> dict[str, dict]:
+        questions = {"is_item": _IS_ITEM_QUESTION}
+        if len(query.candidates) < 2:
+            return questions  # el tipo ya está determinado por la estructura: no hay nada que elegir
+        # El orden importa (Jev favorece levemente la primera opción): va primero el tipo que
+        # propone el extractor, que es la opción conservadora.
         criteria = {tipo.value: _TYPE_CRITERIA[tipo] for tipo in query.candidates}
         if not query.alternativas and TipoItem.VERDADERO_FALSO in query.candidates:
             criteria[_SELF_REPORT] = _SELF_REPORT_CRITERIA
-        return {
+        questions["tipo"] = {
             "type": "choice",
             "instructions": (
                 "What kind of questionnaire item is this, judging by how the respondent must answer it? "
@@ -134,8 +162,9 @@ class JevClassifier:
             ),
             "criteria": criteria,
         }
+        return questions
 
-    def _type_decision(self, answer: dict | None, query: TypeQuery) -> TipoItem | None:
+    def _type_decision(self, answer: dict | None, query: ItemQuery) -> TipoItem | None:
         choice = self._confident_choice(answer)
         allowed = {tipo.value: tipo for tipo in query.candidates}
         return allowed.get(choice) if choice else None
@@ -148,3 +177,11 @@ class JevClassifier:
             return None
         choice = answer.get("choice")
         return choice if isinstance(choice, str) else None
+
+
+def _probability(answer: dict | None) -> float | None:
+    """Probabilidad de una respuesta "noul", o ``None`` si la respuesta no es válida."""
+    value = answer.get("noul") if isinstance(answer, dict) else None
+    if isinstance(value, bool) or not isinstance(value, int | float) or not 0 <= value <= 1:
+        return None
+    return float(value)

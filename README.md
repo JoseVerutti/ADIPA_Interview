@@ -27,9 +27,11 @@ plataforma digital de administración y corrección de pruebas.
   (PDF escaneado), sin ítems detectables y fallas del proveedor de IA.
 - **Resiliencia**: si el LLM no está disponible (cuota agotada, caída o sin API key) se usa un extractor
   basado en reglas, para que el servicio siga respondiendo.
-- **Clasificación eficiente con Jev** (opcional): las decisiones de clasificación las toma
-  [Jev](https://docs.typesafe.ai) de TypeSafe AI, un modelo no generativo especializado en clasificar, en
-  lugar del LLM. Sin su API key, todo funciona igual con reglas.
+- **Clasificación eficiente con Jev** (opcional): [Jev](https://docs.typesafe.ai) de TypeSafe AI, un
+  modelo no generativo especializado en clasificar, toma las decisiones de clasificación en lugar del LLM.
+  Decide si el documento es un cuestionario (antes de gastar una llamada a Gemini), el tipo de cada ítem,
+  y descarta entradas que no son ítems, como instrucciones o campos personales. Sin su API key, todo
+  funciona igual.
 
 ## Arquitectura
 
@@ -69,7 +71,7 @@ flowchart LR
     ctrl -->|"delega"| orch
     orch -->|"1 · validar"| val
     orch -->|"2 · extraer texto"| txt
-    orch -->|"3 · ¿es cuestionario?<br/>5 · tipos ambiguos"| cls
+    orch -->|"3 · ¿es cuestionario?<br/>5 · revisar cada ítem: ¿es ítem? ¿tipo?"| cls
     orch -->|"4 · extraer ítems"| llm
     orch -.->|"4b · respaldo si el LLM falla"| heur
     orch -->|"6 · idioma"| lang
@@ -132,11 +134,13 @@ flowchart TD
     K -->|"no: cuota, 503 o timeout"| L["Extractor heurístico por reglas"]
     K -->|"no y HEURISTIC_FALLBACK=false"| K1["502 extraction_failed"]
     I -->|"no"| L
-    K -->|"sí"| M{"¿Hay ítems cuyo tipo<br/>las reglas no deciden?"}
+    K -->|"sí"| M{"¿JEV_API_KEY configurada?"}
     L --> M
-    M -->|"sí"| N["Jev elige el tipo si hay key y confianza ≥ 0,6;<br/>si no, deciden las reglas"]
-    M -->|"no"| O
-    N --> O["Idioma: detector determinístico,<br/>luego el LLM, luego Jev"]
+    M -->|"sí"| N["Jev revisa cada ítem en paralelo:<br/>¿es un ítem real? · ¿de qué tipo?"]
+    N --> N1["Descarta entradas con p_ítem < 0,2<br/>aplica el tipo si la confianza es ≥ 0,6"]
+    M -->|"no, o Jev no responde"| N2["Se mantiene el tipo que propone<br/>el LLM o las reglas"]
+    N1 --> O
+    N2 --> O["Idioma: detector determinístico,<br/>luego el LLM, luego Jev"]
     O --> P["Normalizar valores y respuestas,<br/>validar contra el esquema"]
     P --> Q{"¿Al menos un ítem válido?"}
     Q -->|"no"| Q1["422 no_items_detected"]
@@ -159,7 +163,8 @@ flowchart TD
      transitorios (red, 5xx) se reintentan con espera; una cuota agotada (429) no se reintenta.
 5. **Respaldo heurístico** si el LLM falla o no está configurado (indicado en la cabecera
    `X-Extraction-Method: heuristic` y en la UI).
-6. **Clasificación de ítems ambiguos e idioma** (reglas + Jev; ver abajo).
+6. **Revisión de cada ítem con Jev** (si está configurado): descarta lo que no es un ítem y decide el
+   tipo; luego se determina el idioma (ver abajo).
 7. **Normalización y validación**: reglas deterministas en código (no en el modelo) que garantizan una
    salida consistente sea cual sea el origen; finalmente se valida contra el esquema Pydantic estricto.
 
@@ -169,48 +174,57 @@ no corresponde a ninguna alternativa, o un ítem de desarrollo con alternativas)
 
 ### Clasificación con Jev
 
-Clasificar ("¿es X o Y?") no requiere un modelo generativo. Por eso, **ninguna decisión de clasificación
-hace una llamada extra al LLM**. La cascada es: reglas deterministas (gratis) → Jev (solo si las reglas no
-alcanzan) → valor por defecto de las reglas.
+Clasificar ("¿es X o Y?") no requiere un modelo generativo. Por eso las decisiones de clasificación las
+toma [Jev](https://docs.typesafe.ai) (TypeSafe AI), un modelo no generativo que devuelve decisiones
+tipadas con probabilidades calibradas y cobra solo la entrada (US$ 0,042 por millón de tokens), muy por
+debajo de un LLM. Gemini se ocupa solo de lo que exige generar: estructurar enunciados, alternativas y
+respuestas.
 
-[Jev](https://docs.typesafe.ai) (TypeSafe AI) devuelve decisiones tipadas con probabilidades calibradas
-y cobra solo la entrada (US$ 0,042 por millón de tokens), muy por debajo de un LLM.
+| Decisión | Pregunta a Jev | Cuándo |
+|---|---|---|
+| ¿El documento es un cuestionario? | `noul` (probabilidad sí/no) | Siempre, **antes** del LLM. Si `p < JEV_GATE_THRESHOLD` (0,1) se responde 422 sin llamar al LLM |
+| ¿La entrada es un ítem real? | `noul` | Cada ítem extraído. Si `p < JEV_ITEM_THRESHOLD` (0,2) se descarta: instrucciones, títulos o campos personales ("Nombre:", "Fecha:") |
+| Tipo del ítem | `choice` entre los tipos que permite su estructura | Cada ítem, en la misma petición que la anterior |
+| Idioma | `choice` entre idiomas | Solo si el detector determinístico no tiene señal y el LLM no lo informó |
 
-Resultados medidos contra la API real (`python -m scripts.check_jev` y pruebas de punta a punta):
+- **Tipos posibles según la estructura**: con alternativas, selección múltiple, Likert o emparejamiento;
+  sin alternativas, desarrollo o verdadero/falso. Si las alternativas son Verdadero/Falso, el tipo
+  queda fijo y no se pregunta. El tipo que propone el extractor va primero, porque Jev favorece levemente
+  la primera opción.
+- **Contexto para emparejamiento**: cada consulta incluye las otras entradas que comparten exactamente
+  las mismas alternativas. Medido contra la API: sin ese contexto, Jev clasificaba "Perú" (con capitales
+  como opciones) como selección múltiple; con él, como emparejamiento.
+- **Opción señuelo** (*autoinforme*) en ítems sin alternativas, para que afirmaciones como "Me siento
+  nervioso" no se confundan con verdadero/falso.
+- El tipo de Jev se aplica solo si `confidence ≥ JEV_MIN_CONFIDENCE` (0,6); si no, se mantiene el que
+  propone el extractor. Una petición por ítem (como recomienda Jev), en paralelo con concurrencia acotada.
+- **Fail-open**: sin `JEV_API_KEY`, o si Jev falla (red, 401, 429/529 tras reintentar, respuesta
+  inesperada), se usa el tipo que propuso Gemini o las reglas: por eso Gemini sigue devolviendo un tipo.
+  Jev nunca hace fallar una petición ni puede dejar el cuestionario vacío. La cabecera `X-Classifier`
+  (`jev` o `rules`) y la UI indican qué se usó.
+
+**Resultados medidos contra la API real** (`python -m scripts.check_jev` y pruebas de punta a punta):
 
 | Prueba | Resultado |
 |---|---|
 | Filtro sobre los 3 ejemplos (es, it, en) | Pasan con p = 0,99–1,00 |
-| Filtro sobre textos que no son cuestionarios (informe, receta, factura) | Rechazados con p = 0,01–0,02, en ~1 s y sin llamar al LLM (que tarda 13–40 s) |
-| Ítems ambiguos y detección de idioma en los 3 idiomas | 11 de 11 correctos |
-| LLM caído, documento con afirmaciones V/F sin marcar | Solo reglas: las clasifica como desarrollo. Con Jev: verdadero/falso (+1,6 s) |
-| Costo en latencia del filtro | ~0,85–1,0 s por documento, red incluida |
+| Filtro sobre textos que no son cuestionarios (informe, receta, factura) | Rechazados con p = 0,01, en ~1 s y sin llamar al LLM (que tarda 11–40 s) |
+| Revisión de 15 entradas en es, it, en (tipos, emparejamiento, Sí/No, autoinforme, campos personales, instrucciones) | 15 de 15 correctas. Ítems reales: p_ítem ≥ 0,85; entradas basura: p_ítem ≤ 0,04 |
+| Idioma (es, it, en) | 3 de 3 |
+| Gemini + Jev sobre los 3 ejemplos | Mismos tipos que la referencia; Jev confirmó los 19 tipos que decidió, sin corregir ninguno |
+| LLM caído, encuesta con "Nombre del estudiante:" y "Fecha:" | Solo reglas: salen como preguntas. Con Jev: descartadas (+1,6 s) |
+| LLM caído, afirmaciones V/F sin marcar | Solo reglas: desarrollo. Con Jev: verdadero/falso |
+| Latencia de Jev | ~1 s para el filtro y ~1–2 s para revisar todos los ítems en paralelo, red incluida |
 
-| Decisión | Tipo de pregunta Jev | Cuándo se consulta |
-|---|---|---|
-| ¿El documento es un cuestionario? | `noul` (probabilidad sí/no) | Siempre, **antes** del LLM. Si `p < JEV_GATE_THRESHOLD` (0,1) se rechaza sin llamar al LLM |
-| Tipo de un ítem ambiguo | `choice` entre los tipos posibles | Solo ítems que las reglas no resuelven: alternativas sin tipo claro (¿selección múltiple o Likert?) o afirmaciones sin alternativas (¿desarrollo o verdadero/falso?) |
-| Idioma | `choice` entre idiomas | Solo si el detector determinístico no tiene señal y el LLM no lo informó |
-
-- Se acepta una elección solo si `confidence ≥ JEV_MIN_CONFIDENCE` (0,6) y está entre los tipos posibles
-  para ese ítem; si no, deciden las reglas.
-- Para ítems sin alternativas se agrega una opción "señuelo" (*autoinforme*, p. ej. "Me siento nervioso")
-  para que esas afirmaciones no se confundan con verdadero/falso.
-- Los ítems ambiguos se consultan en paralelo (una petición por ítem, como recomienda Jev) con
-  concurrencia acotada.
-- **Fail-open**: sin `JEV_API_KEY`, o si Jev falla (red, 401, 429/529 tras reintentar, respuesta
-  inesperada), el pipeline continúa con las reglas; Jev nunca hace fallar una petición. La cabecera
-  `X-Classifier` (`jev` o `rules`) y la UI indican qué se usó.
-
-Para verificar la key y calibrar los umbrales contra la API real (desde `backend/`):
+Para verificar la key y los umbrales contra la API real (desde `backend/`):
 
 ```bash
 python -m scripts.check_jev
 ```
 
 El script lista los modelos disponibles para la key y pasa por el filtro los ejemplos y tres textos que
-no son cuestionarios. También clasifica ítems ambiguos y detecta el idioma en español, italiano e inglés,
-e informa cada acierto o fallo.
+no son cuestionarios. También revisa 15 entradas (ítems de cada tipo y entradas que no son ítems) y
+detecta el idioma en español, italiano e inglés, e informa cada acierto o fallo.
 
 ## Esquema de salida
 
@@ -294,6 +308,7 @@ Aplicación en `http://localhost:5173`.
 | `JEV_MODEL` | `jev-1.14.0` | Versión de Jev (fijada, porque los umbrales dependen del modelo) |
 | `JEV_MIN_CONFIDENCE` | `0.6` | Confianza mínima para aceptar una clasificación de Jev |
 | `JEV_GATE_THRESHOLD` | `0.1` | Probabilidad mínima de "es un cuestionario" para llamar al LLM |
+| `JEV_ITEM_THRESHOLD` | `0.2` | Probabilidad mínima de "es un ítem real" para conservar una entrada |
 | `JEV_TIMEOUT_SECONDS` | `10` | Timeout por llamada a Jev |
 | `LLM_TIMEOUT_SECONDS` | `120` | Timeout por llamada al LLM |
 | `LLM_MAX_ATTEMPTS` | `2` | Intentos ante JSON inválido o errores transitorios |
@@ -311,7 +326,7 @@ Las API keys se leen solo de variables de entorno; `.env` está en `.gitignore`.
 
 ```bash
 cd backend
-pytest                      # 138 tests
+pytest                      # 147 tests
 ruff check . && ruff format --check .
 ```
 

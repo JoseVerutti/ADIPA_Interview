@@ -5,7 +5,7 @@ Comprueba que la key y el modelo funcionan y mide si los umbrales configurados
 
 1. modelos disponibles para la key,
 2. filtro "¿es un cuestionario?" sobre los ejemplos y sobre documentos que no lo son,
-3. clasificación de ítems ambiguos,
+3. revisión de ítems: si son ítems reales y de qué tipo,
 4. detección de idioma.
 
 Uso (desde backend/):  python -m scripts.check_jev
@@ -19,7 +19,7 @@ from pathlib import Path
 from app.core.config import get_settings
 from app.core.exceptions import ClassifierError
 from app.schemas.questionnaire import TipoItem
-from app.services.classification.base import TypeQuery
+from app.services.classification.base import ItemQuery
 from app.services.classification.jev_classifier import JevClassifier
 from app.services.classification.jev_client import JevClient
 from app.services.file_validation_service import ALLOWED_EXTENSIONS, FileValidationService
@@ -27,11 +27,12 @@ from app.services.text_extraction_service import TextExtractionService
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples"
 
-SM, LIKERT, VF, OPEN = (
+SM, LIKERT, VF, OPEN, EMP = (
     TipoItem.SELECCION_MULTIPLE,
     TipoItem.ESCALA_LIKERT,
     TipoItem.VERDADERO_FALSO,
     TipoItem.DESARROLLO,
+    TipoItem.EMPAREJAMIENTO,
 )
 
 # Textos inventados que NO son cuestionarios: el filtro debe rechazarlos.
@@ -44,21 +45,40 @@ NOT_QUESTIONNAIRES = {
     "unit price 1,200.00 USD. Payment due within 30 days.",
 }
 
-# (consulta, tipo esperado tras aplicar la decisión de Jev o, si no decide, la regla por defecto)
-TYPE_CASES = [
-    (TypeQuery("Disfruto aprendiendo cosas nuevas.", ["1", "2", "3", "4", "5"], (SM, LIKERT)), LIKERT),
-    (TypeQuery("¿Cuál es la capital de Francia?", ["Madrid", "París", "Roma"], (SM, LIKERT)), SM),
+CAPITALS = ["Montevideo", "Lima", "Buenos Aires"]
+
+# (consulta, tipo esperado, ¿es un ítem real?). Los candidatos son los que permite la
+# estructura; el primero es el tipo que propondría el extractor (a veces equivocado a propósito).
+ITEM_CASES = [
+    (ItemQuery("Disfruto aprendiendo cosas nuevas.", ["1", "2", "3", "4", "5"], (SM, LIKERT, EMP)), LIKERT, True),
+    (ItemQuery("¿Cuál es la capital de Francia?", ["Madrid", "París", "Roma"], (LIKERT, SM, EMP)), SM, True),
     (
-        TypeQuery(
-            "Mi sento a mio agio con gli altri.", ["Pochissimo", "Così così", "Parecchio", "Del tutto"], (SM, LIKERT)
+        ItemQuery(
+            "Mi sento a mio agio con gli altri.",
+            ["Pochissimo", "Così così", "Parecchio", "Del tutto"],
+            (SM, LIKERT, EMP),
         ),
         LIKERT,
+        True,
     ),
-    (TypeQuery("Which gas do plants absorb?", ["Oxygen", "Carbon dioxide", "Nitrogen"], (SM, LIKERT)), SM),
-    (TypeQuery("El agua hierve a 100 °C a nivel del mar.", [], (OPEN, VF)), VF),
-    (TypeQuery("Roma è la capitale d'Italia.", [], (OPEN, VF)), VF),
-    (TypeQuery("Describa su rutina de estudio.", [], (OPEN, VF)), OPEN),
-    (TypeQuery("Me siento nervioso antes de los exámenes.", [], (OPEN, VF)), OPEN),  # autoinforme: no es V/F
+    (ItemQuery("Which gas do plants absorb?", ["Oxygen", "Carbon dioxide", "Nitrogen"], (SM, LIKERT, EMP)), SM, True),
+    # Emparejamiento: el contexto de las otras premisas que comparten las opciones es imprescindible.
+    (ItemQuery("Perú", CAPITALS, (EMP, SM, LIKERT), ["Argentina", "Uruguay"]), EMP, True),
+    (ItemQuery("Argentina", CAPITALS, (SM, LIKERT, EMP), ["Perú", "Uruguay"]), EMP, True),  # propuesto: SM
+    (
+        ItemQuery("¿Tiene usted mascotas?", ["Sí", "No"], (SM, LIKERT, EMP), ["¿Practica algún deporte?"]),
+        SM,
+        True,
+    ),
+    (ItemQuery("El agua hierve a 100 °C a nivel del mar.", [], (OPEN, VF)), VF, True),
+    (ItemQuery("Roma è la capitale d'Italia.", [], (OPEN, VF)), VF, True),
+    (ItemQuery("Describa su rutina de estudio.", [], (OPEN, VF)), OPEN, True),
+    (ItemQuery("Me siento nervioso antes de los exámenes.", [], (OPEN, VF)), OPEN, True),  # autoinforme
+    # Entradas que no son ítems: deben descartarse.
+    (ItemQuery("Nombre y apellido:", [], (OPEN, VF)), OPEN, False),
+    (ItemQuery("Fecha de nacimiento", [], (OPEN, VF)), OPEN, False),
+    (ItemQuery("Istruzioni: legga attentamente ogni domanda prima di rispondere.", [], (OPEN, VF)), OPEN, False),
+    (ItemQuery("Section B - True or false", [], (OPEN, VF)), OPEN, False),
 ]
 
 LANGUAGE_CASES = {
@@ -79,7 +99,10 @@ async def main() -> int:
     failures = 0
 
     print(f"Modelo configurado: {settings.jev_model}")
-    print(f"Umbrales: filtro < {settings.jev_gate_threshold} rechaza · confianza mínima {settings.jev_min_confidence}")
+    print(
+        f"Umbrales: filtro < {settings.jev_gate_threshold} rechaza · ítem < {settings.jev_item_threshold} "
+        f"se descarta · confianza mínima {settings.jev_min_confidence}"
+    )
 
     print("\n1) Modelos disponibles")
     try:
@@ -114,16 +137,19 @@ async def main() -> int:
         verdict = "pasa" if passes else "se rechaza"
         print(f"   {'✓' if ok else '✗'} {name}: p={probability:.3f} → {verdict}")
 
-    print("\n3) Ítems ambiguos")
-    decisions = await classifier.classify_item_types([query for query, _ in TYPE_CASES])
-    for (query, expected), decided in zip(TYPE_CASES, decisions, strict=True):
-        final = decided or query.candidates[0]
-        ok = final is expected
-        failures += not ok
-        source = "Jev" if decided else "reglas"
-        print(
-            f"   {'✓' if ok else '✗'} {query.enunciado[:45]:<45} → {final.value} ({source}; esperado {expected.value})"
-        )
+    print("\n3) Revisión de ítems: ¿es un ítem real? y ¿de qué tipo?")
+    reviews = await classifier.review_items([query for query, _, _ in ITEM_CASES])
+    for (query, expected_type, expected_item), review in zip(ITEM_CASES, reviews, strict=True):
+        probability = review.is_item_probability
+        kept = probability is None or probability >= settings.jev_item_threshold
+        final = review.tipo or query.candidates[0]
+        item_ok = kept == expected_item
+        type_ok = final is expected_type or not expected_item  # el tipo de una entrada descartada no importa
+        failures += (not item_ok) + (not type_ok)
+        p_text = "  —  " if probability is None else f"{probability:.2f}"
+        verdict = f"{final.value} ({'Jev' if review.tipo else 'propuesto'})" if kept else "descartada"
+        mark = "✓" if item_ok and type_ok else "✗"
+        print(f"   {mark} {query.enunciado[:42]:<42} p_ítem={p_text} → {verdict}")
 
     print("\n4) Idioma")
     for expected, text in LANGUAGE_CASES.items():

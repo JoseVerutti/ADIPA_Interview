@@ -13,7 +13,7 @@ vino del LLM o del extractor heurístico:
 import itertools
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -21,12 +21,16 @@ from pydantic import ValidationError
 from app.core.exceptions import NoItemsDetectedError
 from app.schemas.extraction import RawItem, RawQuestionnaire
 from app.schemas.questionnaire import Cuestionario, Item, TipoItem
-from app.services.classification.base import TypeQuery
+from app.services.classification.base import ItemQuery
 from app.services.text_utils import clean_text, fold, is_likert_label, number_to_str, to_int
 
 logger = logging.getLogger(__name__)
 
 _LIKERT_LABEL_WITH_VALUE_RE = re.compile(r"^(?P<value>-?\d{1,2})\s*[=:\-–).]\s*(?P<label>\S.*)$")
+_TRUE_FALSE_MARK_RE = re.compile(
+    r"\s*[(\[]\s*(?:v\s*/\s*f|t\s*/\s*f|vero\s*/\s*falso|verdadero\s*/\s*falso|true\s*/\s*false)\s*[)\]]\s*$",
+    re.IGNORECASE,
+)
 
 _TIPO_ALIASES: dict[str, TipoItem] = {}
 for _tipo, _aliases in {
@@ -100,22 +104,33 @@ TRUE_FALSE_LABELS: dict[str, tuple[str, str]] = {
 
 
 class QuestionnaireNormalizer:
-    def type_queries(self, raw: RawQuestionnaire) -> dict[int, TypeQuery]:
-        """Ítems (por índice) cuyo tipo las reglas no pueden decidir con seguridad.
+    def item_queries(self, raw: RawQuestionnaire) -> dict[int, ItemQuery]:
+        """Consultas para un clasificador externo, una por ítem con enunciado (por índice).
 
-        Son los únicos que vale la pena enviar a un clasificador externo; el resto se
-        resuelve gratis y de forma determinista.
+        Cada consulta lleva los tipos que la estructura del ítem permite, con el tipo que
+        propone el extractor (o que inferirían las reglas) en primer lugar, y los demás
+        ítems que comparten exactamente sus alternativas (contexto para emparejamiento).
         """
-        queries: dict[int, TypeQuery] = {}
+        entries: list[tuple[int, str, list[str], tuple[TipoItem, ...]]] = []
+        groups: dict[tuple[str, ...], list[str]] = {}
         for index, raw_item in enumerate(raw.items):
             enunciado = _strip_number_prefix(clean_text(raw_item.enunciado), raw_item.numero)
             if not enunciado:
                 continue
             alternativas = self._clean_alternatives(raw_item)
-            candidates = _ambiguous_type_candidates(raw_item.tipo, alternativas, enunciado)
-            if candidates:
-                texts = [texto or (valor or "") for valor, texto in alternativas]
-                queries[index] = TypeQuery(enunciado=enunciado, alternativas=texts, candidates=candidates)
+            texts = [texto or (valor or "") for valor, texto in alternativas]
+            prior = self._resolve_tipo(raw_item.tipo, alternativas)
+            entries.append((index, enunciado, texts, _type_candidates(prior, alternativas)))
+            if len(texts) >= 2:
+                groups.setdefault(_options_key(texts), []).append(enunciado)
+
+        queries: dict[int, ItemQuery] = {}
+        for index, enunciado, texts, candidates in entries:
+            group = groups.get(_options_key(texts), []) if len(texts) >= 2 else []
+            siblings = [other for other in group if other != enunciado][:_MAX_SIBLINGS]
+            queries[index] = ItemQuery(
+                enunciado=enunciado, alternativas=texts, candidates=candidates, siblings=siblings
+            )
         return queries
 
     def normalize(
@@ -125,11 +140,17 @@ class QuestionnaireNormalizer:
         idioma: str,
         source_name: str,
         type_decisions: Mapping[int, TipoItem] | None = None,
+        excluded: Collection[int] = (),
     ) -> Cuestionario:
-        """``type_decisions``: tipos decididos por un clasificador externo, por índice de ítem."""
+        """``type_decisions``: tipos decididos por un clasificador externo, por índice de ítem.
+        ``excluded``: índices de entradas que el clasificador determinó que no son ítems.
+        """
         decisions = type_decisions or {}
         normalized: list[tuple[int | None, dict]] = []
         for index, raw_item in enumerate(raw.items):
+            if index in excluded:
+                logger.info("Entrada descartada por el clasificador (no es un ítem): %r", raw_item.enunciado[:80])
+                continue
             item = self._normalize_item(raw_item, idioma, decisions.get(index))
             if item is not None:
                 normalized.append((to_int(raw_item.numero), item))
@@ -174,6 +195,8 @@ class QuestionnaireNormalizer:
         answer = raw.respuesta_correcta
 
         if tipo is TipoItem.VERDADERO_FALSO:
+            # La marca "(V/F)" es una instrucción de formato, no parte de la afirmación.
+            enunciado = _TRUE_FALSE_MARK_RE.sub("", enunciado).strip() or enunciado
             final_alts, answer = self._true_false(alternativas, answer, idioma)
         elif tipo is TipoItem.ESCALA_LIKERT:
             final_alts, answer = self._likert(alternativas), None
@@ -346,20 +369,31 @@ def _tipo_alias(raw_tipo: str | None) -> TipoItem | None:
     return _TIPO_ALIASES.get(key)
 
 
-def _ambiguous_type_candidates(
-    raw_tipo: str | None, alternativas: list[tuple[str | None, str]], enunciado: str
-) -> tuple[TipoItem, ...] | None:
-    """Tipos posibles cuando las reglas no pueden decidir (el primero es el que aplicarían)."""
-    tipo = _tipo_alias(raw_tipo)
+_MAX_SIBLINGS = 8  # contexto suficiente para reconocer un grupo, sin inflar la petición
+
+
+def _options_key(texts: list[str]) -> tuple[str, ...]:
+    return tuple(fold(text) for text in texts)
+
+
+def _type_candidates(prior: TipoItem, alternativas: list[tuple[str | None, str]]) -> tuple[TipoItem, ...]:
+    """Tipos que permite la estructura del ítem, con el tipo propuesto (``prior``) primero.
+
+    Con alternativas no puede ser de desarrollo; sin alternativas no puede ser Likert,
+    selección múltiple ni emparejamiento. Si las alternativas son Verdadero/Falso, el tipo
+    queda determinado y no hay nada que elegir.
+    """
     if len(alternativas) >= 2:
-        if _looks_true_false(alternativas) or _looks_likert(alternativas):
-            return None
-        if tipo is not None and tipo is not TipoItem.DESARROLLO:
-            return None  # tipo explícito y coherente con tener alternativas
-        return (TipoItem.SELECCION_MULTIPLE, TipoItem.ESCALA_LIKERT)
-    if tipo is not None or enunciado.rstrip().endswith("?"):
-        return None  # tipo explícito, o una pregunta sin alternativas (claramente de desarrollo)
-    return (TipoItem.DESARROLLO, TipoItem.VERDADERO_FALSO)
+        allowed = (
+            (TipoItem.VERDADERO_FALSO,)
+            if _looks_true_false(alternativas)
+            else (TipoItem.SELECCION_MULTIPLE, TipoItem.ESCALA_LIKERT, TipoItem.EMPAREJAMIENTO)
+        )
+    else:
+        allowed = (TipoItem.DESARROLLO, TipoItem.VERDADERO_FALSO)
+    if prior not in allowed:
+        return allowed
+    return (prior, *(tipo for tipo in allowed if tipo is not prior))
 
 
 def _truth(value: str | None) -> bool | None:

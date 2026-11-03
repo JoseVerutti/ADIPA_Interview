@@ -56,6 +56,7 @@ def build_questionnaire_service(
     return QuestionnaireService(
         classifier=classifier if classifier is not None else build_classifier(settings),
         gate_threshold=settings.jev_gate_threshold,
+        item_threshold=settings.jev_item_threshold,
         file_validator=FileValidationService(settings.max_file_size_bytes),
         text_extractor=TextExtractionService(),
         language_detector=LanguageDetectionService(),

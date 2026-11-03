@@ -1,12 +1,12 @@
 """Orquestador del caso de uso: archivo subido → cuestionario estructurado.
 
 Pipeline: validar archivo → extraer texto → filtro "¿es un cuestionario?" (clasificador)
-→ extraer ítems (LLM, con respaldo heurístico) → clasificar ítems ambiguos e idioma
-(reglas + clasificador) → normalizar y validar contra el esquema.
+→ extraer ítems (LLM, con respaldo heurístico) → revisar cada ítem con el clasificador
+(¿es un ítem real? ¿de qué tipo?) → idioma → normalizar y validar contra el esquema.
 
-Ninguna decisión de clasificación requiere una llamada extra al LLM generativo: el LLM
-estructura el contenido (y propone el tipo en esa misma llamada); las decisiones que
-quedan las toman reglas deterministas y, cuando no alcanzan, el clasificador (Jev).
+Las decisiones de clasificación las toma el clasificador (Jev). El LLM estructura el
+contenido y propone un tipo en la misma llamada, que solo se usa como respaldo cuando
+el clasificador no está configurado, falla o no tiene una decisión con confianza.
 Sin clasificador configurado el pipeline se comporta exactamente igual que antes.
 Nada se persiste: el documento y el resultado viven solo durante la petición.
 """
@@ -49,7 +49,16 @@ class ExtractionResult:
     fallback_reason: str | None = None
     classifier: str | None = None
     classifier_decisions: int = 0
+    type_corrections: int = 0
+    items_excluded: int = 0
     timings_ms: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class _ItemsReview:
+    type_decisions: dict[int, TipoItem] = field(default_factory=dict)
+    excluded: set[int] = field(default_factory=set)
+    type_corrections: int = 0
 
 
 class QuestionnaireService:
@@ -66,6 +75,7 @@ class QuestionnaireService:
         max_text_chars: int,
         classifier: Classifier | None = None,
         gate_threshold: float = 0.1,
+        item_threshold: float = 0.2,
     ) -> None:
         self._file_validator = file_validator
         self._text_extractor = text_extractor
@@ -77,6 +87,7 @@ class QuestionnaireService:
         self._max_text_chars = max_text_chars
         self._classifier: Classifier = classifier or NoopClassifier()
         self._gate_threshold = gate_threshold
+        self._item_threshold = item_threshold
 
     @property
     def llm_provider(self) -> str | None:
@@ -111,21 +122,28 @@ class QuestionnaireService:
         timings["item_extraction"] = _elapsed_ms(step)
 
         step = time.perf_counter()
-        type_decisions = await self._classify_ambiguous_items(raw)
+        review = await self._review_items(raw)
         idioma = await self._detect_language(text, raw)
         timings["classification"] = _elapsed_ms(step)
 
         questionnaire = self._normalizer.normalize(
-            raw, idioma=idioma, source_name=filename or "", type_decisions=type_decisions
+            raw,
+            idioma=idioma,
+            source_name=filename or "",
+            type_decisions=review.type_decisions,
+            excluded=review.excluded,
         )
         timings["total"] = _elapsed_ms(started)
         logger.info(
-            "Cuestionario procesado: %d ítems, idioma=%s, método=%s, clasificador=%s (%d decisiones), tiempos=%s",
+            "Cuestionario procesado: %d ítems, idioma=%s, método=%s, clasificador=%s "
+            "(%d tipos decididos, %d corregidos, %d entradas descartadas), tiempos=%s",
             questionnaire.total_items,
             idioma,
             method,
             self._classifier.name or "reglas",
-            len(type_decisions),
+            len(review.type_decisions),
+            review.type_corrections,
+            len(review.excluded),
             timings,
         )
         return ExtractionResult(
@@ -134,7 +152,9 @@ class QuestionnaireService:
             provider=self.llm_provider if method == METHOD_LLM else None,
             fallback_reason=fallback_reason,
             classifier=self._classifier.name,
-            classifier_decisions=len(type_decisions),
+            classifier_decisions=len(review.type_decisions),
+            type_corrections=review.type_corrections,
+            items_excluded=len(review.excluded),
             timings_ms=timings,
         )
 
@@ -150,13 +170,37 @@ class QuestionnaireService:
                 "afirmaciones para responder."
             )
 
-    async def _classify_ambiguous_items(self, raw: RawQuestionnaire) -> dict[int, TipoItem]:
-        """Consulta al clasificador solo los ítems cuyo tipo las reglas no pueden decidir."""
-        queries = self._normalizer.type_queries(raw)
+    async def _review_items(self, raw: RawQuestionnaire) -> _ItemsReview:
+        """El clasificador revisa cada ítem: decide su tipo y si es realmente un ítem.
+
+        Un tipo solo se aplica si el clasificador lo decidió con confianza; si no, queda el
+        que propone el extractor. Una entrada se descarta si su probabilidad de ser un ítem
+        es menor que ``item_threshold``, salvo que eso dejara el cuestionario vacío.
+        """
+        result = _ItemsReview()
+        queries = self._normalizer.item_queries(raw)
         if not queries:
-            return {}
-        decisions = await self._classifier.classify_item_types(list(queries.values()))
-        return {index: tipo for index, tipo in zip(queries, decisions, strict=True) if tipo is not None}
+            return result
+        reviews = await self._classifier.review_items(list(queries.values()))
+
+        for (index, query), review in zip(queries.items(), reviews, strict=True):
+            if review.is_item_probability is not None and review.is_item_probability < self._item_threshold:
+                result.excluded.add(index)
+            if review.tipo is not None:
+                result.type_decisions[index] = review.tipo
+                if review.tipo is not query.candidates[0]:
+                    result.type_corrections += 1
+                    logger.info(
+                        "Clasificador: tipo de '%s' corregido de %s a %s",
+                        query.enunciado[:60],
+                        query.candidates[0].value,
+                        review.tipo.value,
+                    )
+
+        if result.excluded and len(result.excluded) == len(queries):
+            logger.warning("El clasificador descartaría todas las entradas; se conservan (fail-open).")
+            result.excluded.clear()
+        return result
 
     async def _detect_language(self, text: str, raw: RawQuestionnaire) -> str:
         """Detector determinístico → idioma propuesto por el LLM (sin costo extra) → clasificador → 'und'."""

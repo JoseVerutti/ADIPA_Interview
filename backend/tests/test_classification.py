@@ -13,7 +13,7 @@ from app.core.exceptions import ClassifierError
 from app.dependencies import build_classifier
 from app.schemas.extraction import RawQuestionnaire
 from app.schemas.questionnaire import TipoItem
-from app.services.classification.base import NoopClassifier, TypeQuery
+from app.services.classification.base import ItemQuery, ItemReview, NoopClassifier
 from app.services.classification.jev_classifier import JevClassifier
 from app.services.classification.jev_client import JEV_URL, JevClient
 from app.services.normalization_service import QuestionnaireNormalizer
@@ -128,26 +128,61 @@ def test_gate_only_sends_a_sample_of_long_documents():
     assert len(states[0]) == 12_000
 
 
-def type_answer(choice: str, confidence: float) -> dict:
-    return {"tipo": {"type": "choice", "choice": choice, "confidence": confidence, "probabilities": {}}}
+def type_answer(choice: str, confidence: float, is_item: float = 0.95) -> dict:
+    return {
+        "is_item": {"type": "noul", "noul": is_item},
+        "tipo": {"type": "choice", "choice": choice, "confidence": confidence, "probabilities": {}},
+    }
 
 
-def test_item_types_accept_confident_choices_only():
+SM_OR_LIKERT = (TipoItem.SELECCION_MULTIPLE, TipoItem.ESCALA_LIKERT, TipoItem.EMPAREJAMIENTO)
+OPEN_OR_TF = (TipoItem.DESARROLLO, TipoItem.VERDADERO_FALSO)
+
+
+def test_review_asks_both_questions_in_a_single_request():
+    requests = []
+
+    def handler(request):
+        requests.append(json.loads(request.content))
+        return answers_response(type_answer("escala_likert", 0.9))
+
+    query = ItemQuery("Disfruto aprendiendo.", ["1", "2"], SM_OR_LIKERT)
+    reviews = run(classifier_with(handler).review_items([query]))
+
+    assert len(requests) == 1
+    assert set(requests[0]["questions"]) == {"is_item", "tipo"}
+    assert requests[0]["state"] == {"entry": "Disfruto aprendiendo.", "answer_options": ["1", "2"]}
+    assert reviews == [ItemReview(is_item_probability=0.95, tipo=TipoItem.ESCALA_LIKERT)]
+
+
+def test_review_only_asks_is_item_when_structure_decides_the_type():
+    questions = []
+
+    def handler(request):
+        questions.append(json.loads(request.content)["questions"])
+        return answers_response({"is_item": {"type": "noul", "noul": 0.9}})
+
+    query = ItemQuery("La Luna es una estrella.", ["Verdadero", "Falso"], (TipoItem.VERDADERO_FALSO,))
+    reviews = run(classifier_with(handler).review_items([query]))
+
+    assert list(questions[0]) == ["is_item"]
+    assert reviews == [ItemReview(is_item_probability=0.9, tipo=None)]
+
+
+def test_review_accepts_confident_types_only():
     replies = {
         "confiado": type_answer("escala_likert", 0.9),
         "dudoso": type_answer("escala_likert", 0.4),
-        "fuera_de_candidatos": type_answer("emparejamiento", 0.99),
+        "fuera_de_candidatos": type_answer("desarrollo", 0.99),
     }
 
     def handler(request):
-        return answers_response(replies[json.loads(request.content)["state"]["item"]])
+        return answers_response(replies[json.loads(request.content)["state"]["entry"]])
 
-    queries = [
-        TypeQuery(name, ["1", "2", "3"], (TipoItem.SELECCION_MULTIPLE, TipoItem.ESCALA_LIKERT)) for name in replies
-    ]
-    decisions = run(classifier_with(handler).classify_item_types(queries))
+    queries = [ItemQuery(name, ["1", "2", "3"], SM_OR_LIKERT) for name in replies]
+    reviews = run(classifier_with(handler).review_items(queries))
 
-    assert decisions == [TipoItem.ESCALA_LIKERT, None, None]
+    assert [review.tipo for review in reviews] == [TipoItem.ESCALA_LIKERT, None, None]
 
 
 def test_item_without_options_includes_self_report_decoy():
@@ -157,21 +192,22 @@ def test_item_without_options_includes_self_report_decoy():
         questions.append(json.loads(request.content)["questions"]["tipo"])
         return answers_response(type_answer("self_report", 0.95))
 
-    query = TypeQuery("Me siento nervioso.", [], (TipoItem.DESARROLLO, TipoItem.VERDADERO_FALSO))
-    decisions = run(classifier_with(handler).classify_item_types([query]))
+    reviews = run(classifier_with(handler).review_items([ItemQuery("Me siento nervioso.", [], OPEN_OR_TF)]))
 
     assert list(questions[0]["criteria"]) == ["desarrollo", "verdadero_falso", "self_report"]
-    assert decisions == [None]  # el señuelo no decide: se mantienen las reglas
+    assert reviews[0].tipo is None  # el señuelo no decide: se mantiene el tipo propuesto
 
 
-def test_item_types_fail_open_per_item():
+def test_review_fails_open_per_item():
     def handler(request):
-        if json.loads(request.content)["state"]["item"] == "falla":
+        if json.loads(request.content)["state"]["entry"] == "falla":
             return httpx.Response(400)
-        return answers_response(type_answer("verdadero_falso", 0.8))
+        return answers_response(type_answer("verdadero_falso", 0.8, is_item=0.1))
 
-    queries = [TypeQuery(text, [], (TipoItem.DESARROLLO, TipoItem.VERDADERO_FALSO)) for text in ("ok", "falla")]
-    assert run(classifier_with(handler).classify_item_types(queries)) == [TipoItem.VERDADERO_FALSO, None]
+    queries = [ItemQuery(text, [], OPEN_OR_TF) for text in ("ok", "falla")]
+    reviews = run(classifier_with(handler).review_items(queries))
+
+    assert reviews == [ItemReview(is_item_probability=0.1, tipo=TipoItem.VERDADERO_FALSO), ItemReview()]
 
 
 def test_detect_language():
@@ -199,25 +235,28 @@ def raw(items: list[dict]) -> RawQuestionnaire:
     return RawQuestionnaire.model_validate({"titulo": "T", "items": items})
 
 
-def test_only_ambiguous_items_are_sent_to_the_classifier():
+def test_every_item_is_queried_with_the_types_its_structure_allows():
     questionnaire = raw([
-        {"enunciado": "¿Capital de Chile?", "alternativas": ["Lima", "Santiago"]},       # 0: ambiguo (SM o Likert)
-        {"enunciado": "Me siento", "alternativas": ["Nunca", "A veces", "Siempre"]},    # 1: Likert por vocabulario
-        {"enunciado": "La Luna es una estrella.", "alternativas": ["Verdadero", "Falso"]},  # 2: V/F por vocabulario
-        {"enunciado": "El sol es una estrella."},                                       # 3: ambiguo (desarrollo o V/F)
-        {"enunciado": "¿Por qué estudias?"},                                            # 4: pregunta → desarrollo
-        {"enunciado": "Describe tu día.", "tipo": "desarrollo"},                        # 5: tipo explícito
-        {"enunciado": "2+2", "tipo": "seleccion_multiple", "alternativas": ["3", "4"]},  # 6: tipo explícito
+        {"enunciado": "¿Capital de Chile?", "alternativas": ["Lima", "Santiago"]},             # 0
+        {"enunciado": "Me siento", "alternativas": ["Nunca", "A veces", "Siempre"]},          # 1
+        {"enunciado": "La Luna es una estrella.", "alternativas": ["Verdadero", "Falso"]},    # 2
+        {"enunciado": "El sol es una estrella."},                                             # 3
+        {"enunciado": "Perú", "tipo": "emparejamiento", "alternativas": ["Lima", "Quito"]},   # 4
+        {"enunciado": "   "},                                                                 # 5: sin enunciado
     ])  # fmt: skip
 
-    queries = QuestionnaireNormalizer().type_queries(questionnaire)
+    queries = QuestionnaireNormalizer().item_queries(questionnaire)
 
-    assert set(queries) == {0, 3}
-    assert queries[0].candidates == (TipoItem.SELECCION_MULTIPLE, TipoItem.ESCALA_LIKERT)
+    assert set(queries) == {0, 1, 2, 3, 4}
+    # El primer candidato es el tipo propuesto por el extractor o por las reglas.
+    assert queries[0].candidates == (TipoItem.SELECCION_MULTIPLE, TipoItem.ESCALA_LIKERT, TipoItem.EMPAREJAMIENTO)
+    assert queries[1].candidates == (TipoItem.ESCALA_LIKERT, TipoItem.SELECCION_MULTIPLE, TipoItem.EMPAREJAMIENTO)
+    assert queries[2].candidates == (TipoItem.VERDADERO_FALSO,)  # Verdadero/Falso: nada que elegir
     assert queries[3].candidates == (TipoItem.DESARROLLO, TipoItem.VERDADERO_FALSO)
+    assert queries[4].candidates[0] is TipoItem.EMPAREJAMIENTO
 
 
-def test_classifier_decisions_override_the_rules():
+def test_classifier_decisions_override_the_proposed_type():
     questionnaire = raw([
         {"enunciado": "Disfruto aprendiendo.", "alternativas": ["1", "2", "3", "4", "5"]},
         {"enunciado": "El sol es una estrella."},
@@ -238,9 +277,23 @@ def test_classifier_decisions_override_the_rules():
     assert [a.valor for a in by_classifier.items[1].alternativas] == ["V", "F"]
 
 
+def test_excluded_entries_are_dropped():
+    questionnaire = raw([
+        {"numero": 1, "enunciado": "Nombre:"},
+        {"numero": 2, "enunciado": "Describa su día.", "tipo": "desarrollo"},
+    ])  # fmt: skip
+    result = QuestionnaireNormalizer().normalize(questionnaire, idioma="es", source_name="x.pdf", excluded={0})
+
+    assert [(item.numero, item.enunciado) for item in result.items] == [(2, "Describa su día.")]
+
+
 # ------------------------------------------------------------------ pipeline / API
 def upload(client, lines=SAMPLE_PDF_LINES):
     return client.post(ENDPOINT, files={"file": ("doc.pdf", pdf_bytes(lines), "application/pdf")})
+
+
+def llm_output_of(example: dict) -> dict:
+    return {key: value for key, value in example.items() if key != "total_items"}
 
 
 def test_gate_rejects_non_questionnaires_without_calling_the_llm(make_client):
@@ -254,32 +307,66 @@ def test_gate_rejects_non_questionnaires_without_calling_the_llm(make_client):
     assert llm.prompts == []
 
 
-def test_gate_lets_questionnaires_through(make_client, spec_example):
-    llm_output = {key: value for key, value in spec_example.items() if key != "total_items"}
+def test_classifier_reviews_every_item_extracted_by_the_llm(make_client, spec_example):
     classifier = FakeClassifier(probability=0.95)
 
-    response = upload(make_client(FakeLLMClient(llm_output), classifier))
+    response = upload(make_client(FakeLLMClient(llm_output_of(spec_example)), classifier))
 
     assert response.status_code == 200
     assert response.json() == spec_example
     assert response.headers["X-Classifier"] == "fake-jev"
-    assert classifier.calls == ["gate"]  # el LLM ya dio tipos e idioma inequívocos: no hay más consultas
+    assert classifier.calls == ["gate", "items"]
+    statements = [item["enunciado"] for item in spec_example["items"]]
+    assert [query.enunciado for query in classifier.item_queries] == statements
 
 
-def test_classifier_resolves_ambiguous_heuristic_items(make_client):
+def test_classifier_type_wins_over_the_llm_type(make_client, spec_example):
+    statement = spec_example["items"][0]["enunciado"]  # Likert según el LLM
+    classifier = FakeClassifier(probability=0.95, item_types={statement: TipoItem.SELECCION_MULTIPLE})
+
+    response = upload(make_client(FakeLLMClient(llm_output_of(spec_example)), classifier))
+
+    first = response.json()["items"][0]
+    assert first["tipo"] == "seleccion_multiple"
+    assert [a["valor"] for a in first["alternativas"]] == ["A", "B", "C", "D"]
+
+
+def test_classifier_drops_entries_that_are_not_items(make_client):
+    lines = ["Evaluación", "1. Nombre del estudiante", "2. ¿Por qué estudias?", "3. ¿Qué te motiva?"]
+    classifier = FakeClassifier(probability=0.9, non_items={"Nombre del estudiante"})
+
+    response = upload(make_client(classifier=classifier), lines)
+
+    assert response.status_code == 200
+    assert [item["enunciado"] for item in response.json()["items"]] == ["¿Por qué estudias?", "¿Qué te motiva?"]
+
+
+def test_exclusions_never_empty_the_questionnaire(make_client):
+    lines = ["Ficha", "1. Nombre del estudiante", "2. Curso"]
+    classifier = FakeClassifier(probability=0.9, non_items={"Nombre del estudiante", "Curso"})
+
+    response = upload(make_client(classifier=classifier), lines)
+
+    assert response.status_code == 200  # fail-open: el clasificador nunca deja el resultado vacío
+    assert response.json()["total_items"] == 2
+
+
+def test_classifier_resolves_heuristic_items(make_client):
     lines = ["Repaso", "1. El sol es una estrella.", "2. ¿Por qué estudias?"]
     classifier = FakeClassifier(probability=0.9, item_types={"El sol es una estrella.": TipoItem.VERDADERO_FALSO})
 
     response = upload(make_client(classifier=classifier), lines)
 
     assert response.status_code == 200
-    items = response.json()["items"]
-    assert [item["tipo"] for item in items] == ["verdadero_falso", "desarrollo"]
-    assert [query.enunciado for query in classifier.type_queries] == ["El sol es una estrella."]
+    assert [item["tipo"] for item in response.json()["items"]] == ["verdadero_falso", "desarrollo"]
 
 
 def test_classifier_without_answers_keeps_rule_based_behaviour(make_client, spec_example):
-    response = upload(make_client(classifier=FakeClassifier()))
+    classifier = FakeClassifier()
+    classifier.review_items = NoopClassifier().review_items  # sin decisiones de ningún tipo
+
+    response = upload(make_client(classifier=classifier))
+
     assert response.status_code == 200
     assert response.json() == spec_example
 
@@ -298,3 +385,32 @@ def test_client_lists_models():
         return httpx.Response(200, json={"models": [{"name": "jev-latest"}, {"name": "jev-preview"}]})
 
     assert run(jev_client(handler).list_models()) == ["jev-latest", "jev-preview"]
+
+
+def test_items_sharing_options_are_sent_as_context():
+    capitals = ["Montevideo", "Lima", "Quito"]
+    questionnaire = raw([
+        {"enunciado": "Perú", "alternativas": capitals},
+        {"enunciado": "Uruguay", "alternativas": capitals},
+        {"enunciado": "Ecuador", "alternativas": capitals},
+        {"enunciado": "¿2+2?", "alternativas": ["3", "4"]},
+    ])  # fmt: skip
+
+    queries = QuestionnaireNormalizer().item_queries(questionnaire)
+
+    assert queries[0].siblings == ["Uruguay", "Ecuador"]
+    assert queries[3].siblings == []
+
+
+def test_siblings_are_included_in_the_jev_state():
+    states = []
+
+    def handler(request):
+        states.append(json.loads(request.content)["state"])
+        return answers_response(type_answer("emparejamiento", 0.8))
+
+    query = ItemQuery("Perú", ["Montevideo", "Lima"], SM_OR_LIKERT, ["Uruguay", "Ecuador"])
+    reviews = run(classifier_with(handler).review_items([query]))
+
+    assert states[0]["other_entries_sharing_these_options"] == ["Uruguay", "Ecuador"]
+    assert reviews[0].tipo is TipoItem.EMPAREJAMIENTO

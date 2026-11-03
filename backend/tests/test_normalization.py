@@ -151,3 +151,8 @@ def test_raises_when_there_are_no_items():
 def test_title_falls_back_to_file_name():
     result = normalize([{"enunciado": "Uno", "tipo": "desarrollo"}], titulo=None)
     assert result.titulo == "Mi cuestionario"
+
+
+def test_true_false_mark_is_removed_from_the_statement():
+    result = normalize([{"enunciado": "Il sole sorge a est. (V/F)", "tipo": "verdadero_falso"}], idioma="it")
+    assert result.items[0].enunciado == "Il sole sorge a est."

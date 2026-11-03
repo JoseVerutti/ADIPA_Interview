@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from app.core.config import Settings, get_settings
 from app.dependencies import build_questionnaire_service, get_questionnaire_service
 from app.main import create_app
+from app.services.classification.base import ItemReview
 
 
 class FakeLLMClient:
@@ -32,21 +33,28 @@ class FakeClassifier:
 
     name = "fake-jev"
 
-    def __init__(self, *, probability=None, item_types=None, language=None) -> None:
+    def __init__(self, *, probability=None, item_types=None, non_items=(), language=None) -> None:
         self.probability = probability
         self.item_types = item_types or {}  # enunciado -> TipoItem
+        self.non_items = set(non_items)  # enunciados que "no son ítems"
         self.language = language
         self.calls: list[str] = []
-        self.type_queries = []
+        self.item_queries = []
 
     async def questionnaire_probability(self, text):
         self.calls.append("gate")
         return self.probability
 
-    async def classify_item_types(self, queries):
-        self.calls.append("types")
-        self.type_queries.extend(queries)
-        return [self.item_types.get(query.enunciado) for query in queries]
+    async def review_items(self, queries):
+        self.calls.append("items")
+        self.item_queries.extend(queries)
+        return [
+            ItemReview(
+                is_item_probability=0.05 if query.enunciado in self.non_items else 0.95,
+                tipo=self.item_types.get(query.enunciado),
+            )
+            for query in queries
+        ]
 
     async def detect_language(self, text):
         self.calls.append("language")
